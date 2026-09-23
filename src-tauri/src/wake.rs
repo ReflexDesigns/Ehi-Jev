@@ -4,10 +4,9 @@
 //! never runs on CPAL's real-time callback thread.
 
 use std::{
-    env,
     sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc::{sync_channel, Receiver, SyncSender, TrySendError},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::{channel, sync_channel, Receiver, SyncSender, TrySendError},
         Arc,
     },
     thread,
@@ -25,6 +24,7 @@ use tauri::{AppHandle, Emitter, State};
 pub struct WakeController {
     enabled: Arc<AtomicBool>,
     started: Arc<AtomicBool>,
+    end_session: Arc<AtomicBool>,
 }
 
 #[tauri::command]
@@ -47,11 +47,12 @@ pub fn start_wake_listener(
     let enabled = Arc::clone(&controller.enabled);
     enabled.store(true, Ordering::Release);
     let started = Arc::clone(&controller.started);
+    let end_session = Arc::clone(&controller.end_session);
     let app_for_worker = app.clone();
     if let Err(error) = thread::Builder::new()
         .name("heyjev-wake-word".into())
         .spawn(move || {
-            let result = listen_for_keyword(kws, enabled, app_for_worker.clone());
+            let result = listen_for_keyword(kws, enabled, end_session, app_for_worker.clone());
             started.store(false, Ordering::Release);
             if let Err(error) = result {
                 let _ = app_for_worker.emit("app:wake-error", error);
@@ -68,6 +69,12 @@ pub fn start_wake_listener(
 #[tauri::command]
 pub fn set_wake_enabled(active: bool, controller: State<'_, WakeController>) {
     controller.enabled.store(active, Ordering::Release);
+}
+
+/// Chiude la sessione di ascolto (es. "grazie", "silenzio").
+#[tauri::command]
+pub fn end_session(controller: State<'_, WakeController>) {
+    controller.end_session.store(true, Ordering::Release);
 }
 
 fn create_keyword_spotter(app: &AppHandle) -> Result<KeywordSpotter, String> {
@@ -100,11 +107,8 @@ fn create_keyword_spotter(app: &AppHandle) -> Result<KeywordSpotter, String> {
     config.model_config.num_threads = 1;
     config.keywords_file = Some(keywords.to_string_lossy().into_owned());
     config.keywords_score = 1.5;
-    // Taratura per microfono/ambiente: più basso = più sensibile (più falsi positivi).
-    config.keywords_threshold = env::var("WAKE_THRESHOLD")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0.1);
+    // Sotto 0.1 il richiamo non migliora (misurato): il limite è il modello, non la soglia.
+    config.keywords_threshold = 0.1;
 
     KeywordSpotter::create(&config)
         .ok_or_else(|| "sherpa-onnx non riesce a caricare il modello English KWS.".to_string())
@@ -113,6 +117,7 @@ fn create_keyword_spotter(app: &AppHandle) -> Result<KeywordSpotter, String> {
 fn listen_for_keyword(
     kws: KeywordSpotter,
     enabled: Arc<AtomicBool>,
+    end_session: Arc<AtomicBool>,
     app: AppHandle,
 ) -> Result<(), String> {
     let host = cpal::default_host();
@@ -140,7 +145,15 @@ fn listen_for_keyword(
         .play()
         .map_err(|error| format!("Impossibile avviare il microfono: {error}"))?;
 
-    process_audio(receiver, kws, sample_rate, enabled, failed, app)
+    process_audio(
+        receiver,
+        kws,
+        sample_rate,
+        enabled,
+        failed,
+        end_session,
+        app,
+    )
 }
 
 fn build_audio_stream(
@@ -209,37 +222,96 @@ where
         .map_err(|error| format!("Impossibile inizializzare il microfono: {error}"))
 }
 
-/// Comando registrato dopo la wake word sullo stesso stream CPAL: niente secondo
-/// microfono nella WebView (prompt permessi, parole iniziali tagliate).
-struct Capture {
-    samples: Vec<f32>,
-    speech: bool,
+/// Sessione dopo la wake word, sullo stesso stream CPAL (niente microfono nella WebView).
+/// Ogni frase chiusa da una breve pausa va subito a Whisper mentre si continua ad
+/// ascoltare; la sessione finisce dopo `idle_seconds` senza parlato.
+struct Session {
+    segment: Vec<f32>,
+    speech: usize,
     quiet: usize,
+    idle: usize,
+    peak: f32,
+    heard: bool,
 }
 
-const COMMAND_MAX_SECS: f32 = 6.0;
-const COMMAND_NO_SPEECH_SECS: f32 = 3.0;
-const COMMAND_END_SILENCE_SECS: f32 = 0.8;
+enum Step {
+    Listen,
+    Segment(Vec<f32>),
+    End,
+}
 
-impl Capture {
+const PAUSE_SECS: f32 = 0.5;
+const SEGMENT_MAX_SECS: f32 = 8.0;
+const MIN_SPEECH_SECS: f32 = 0.2; // sotto: tosse/rumore, non va a Whisper
+const PREROLL_SECS: f32 = 0.3; // audio prima del parlato, per non tagliare l'attacco
+const FIRST_COMMAND_WAIT_SECS: f32 = 4.0;
+
+impl Session {
     fn new() -> Self {
         Self {
-            samples: Vec::new(),
-            speech: false,
+            segment: Vec::new(),
+            speech: 0,
             quiet: 0,
+            idle: 0,
+            peak: 0.0,
+            heard: false,
         }
     }
 
-    /// Aggiunge un blocco; `true` quando il comando è finito (pausa dopo il parlato,
-    /// nessun parlato, o durata massima).
-    fn push(&mut self, samples: &[f32], loud: bool, rate: f32) -> bool {
-        self.samples.extend_from_slice(samples);
-        self.speech |= loud;
-        self.quiet = if loud { 0 } else { self.quiet + samples.len() };
-        let secs = self.samples.len() as f32 / rate;
-        secs >= COMMAND_MAX_SECS
-            || (self.speech && self.quiet as f32 / rate >= COMMAND_END_SILENCE_SECS)
-            || (!self.speech && secs >= COMMAND_NO_SPEECH_SECS)
+    fn push(
+        &mut self,
+        samples: &[f32],
+        rms: f32,
+        threshold: f32,
+        idle_secs: f32,
+        rate: f32,
+    ) -> Step {
+        let secs = |n: usize| n as f32 / rate;
+        let talking = self.speech > 0;
+        // Fine frase anche relativa al picco: regge i microfoni con soppressione rumore.
+        let loud = rms > threshold && (!talking || rms > self.peak * 0.1);
+        self.segment.extend_from_slice(samples);
+        self.idle += samples.len();
+        if loud {
+            self.speech += samples.len();
+            self.peak = self.peak.max(rms);
+            self.quiet = 0;
+        } else if talking {
+            self.quiet += samples.len();
+        } else {
+            let keep = (PREROLL_SECS * rate) as usize;
+            if self.segment.len() > keep {
+                self.segment.drain(..self.segment.len() - keep);
+            }
+        }
+
+        // Solo parlato vero tiene aperta la sessione: colpi di rumore brevi no.
+        if secs(self.speech) >= MIN_SPEECH_SECS {
+            self.idle = 0;
+        }
+        if self.speech > 0 {
+            if secs(self.quiet) < PAUSE_SECS && secs(self.segment.len()) < SEGMENT_MAX_SECS {
+                return Step::Listen;
+            }
+            let segment = std::mem::take(&mut self.segment);
+            let enough = secs(self.speech) >= MIN_SPEECH_SECS;
+            (self.speech, self.quiet, self.peak) = (0, 0, 0.0);
+            if enough {
+                self.heard = true;
+                return Step::Segment(segment);
+            }
+            return Step::Listen;
+        }
+        let limit = if self.heard {
+            idle_secs
+        } else {
+            FIRST_COMMAND_WAIT_SECS.max(idle_secs)
+        };
+        if secs(self.idle) >= limit {
+            Step::End
+        } else {
+            Step::Listen
+        }
     }
 }
 
@@ -249,17 +321,35 @@ fn process_audio(
     sample_rate: i32,
     enabled: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
+    end_requested: Arc<AtomicBool>,
     app: AppHandle,
 ) -> Result<(), String> {
     let stream = kws.create_stream();
     let rate = sample_rate as f32;
-    // Parlato = RMS sopra VAD_RATIO volte il rumore di fondo (taratura per microfono).
-    let vad_ratio: f32 = env::var("VAD_RATIO")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(3.0);
-    let mut floor = 0.01_f32;
-    let mut capture: Option<Capture> = None;
+
+    // Whisper gira su un thread a parte: mentre trascrive una frase si ascolta la successiva.
+    let pending = Arc::new(AtomicUsize::new(0));
+    let (segments, segment_receiver) = channel::<Vec<f32>>();
+    {
+        let (app, pending) = (app.clone(), Arc::clone(&pending));
+        thread::Builder::new()
+            .name("heyjev-whisper".into())
+            .spawn(move || {
+                for segment in segment_receiver {
+                    let _ = match crate::transcribe(&app, &segment, sample_rate as u32) {
+                        Ok(text) => app.emit("app:transcript", text),
+                        Err(error) => app.emit("app:transcript-error", error),
+                    };
+                    pending.fetch_sub(1, Ordering::AcqRel);
+                }
+            })
+            .map_err(|error| format!("Avvio del worker Whisper fallito: {error}"))?;
+    }
+
+    let mut noise = 0.01_f32;
+    let mut envelope = 0.01_f32;
+    // (stato, soglia parlato, secondi di silenzio per chiudere)
+    let mut session: Option<(Session, f32, f32)> = None;
     let mut last_level = Instant::now();
     let mut was_enabled = true;
     loop {
@@ -275,29 +365,32 @@ fn process_audio(
         };
         let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
 
-        if let Some(command) = capture.as_mut() {
-            let threshold = floor * vad_ratio;
+        if let Some((active, threshold, idle_secs)) = session.as_mut() {
             if last_level.elapsed() >= Duration::from_millis(40) {
                 last_level = Instant::now();
-                let _ = app.emit("app:level", (rms / (threshold * 4.0)).min(1.0));
+                let _ = app.emit("app:level", (rms / (*threshold * 4.0)).min(1.0));
             }
-            if !command.push(&samples, rms > threshold, rate) {
-                continue;
+            // Il silenzio si conta da quando il risultato è pronto, non durante Whisper.
+            if pending.load(Ordering::Acquire) > 0 {
+                active.idle = 0;
             }
-            let audio = std::mem::take(&mut command.samples);
-            capture = None;
-            let _ = app.emit("app:listening-done", ());
-            let _ = match crate::transcribe(&app, &audio, sample_rate as u32) {
-                Ok(text) => app.emit("app:transcript", text),
-                Err(error) => app.emit("app:transcript-error", error),
-            };
-            // Audio arrivato durante Whisper: vecchio, lo scartiamo.
-            while receiver.try_recv().is_ok() {}
+            let step = active.push(&samples, rms, *threshold, *idle_secs, rate);
+            if let Step::Segment(segment) = step {
+                pending.fetch_add(1, Ordering::AcqRel);
+                let _ = app.emit("app:segment", ());
+                let _ = segments.send(segment);
+            } else if end_requested.swap(false, Ordering::AcqRel)
+                || (matches!(step, Step::End) && pending.load(Ordering::Acquire) == 0)
+            {
+                session = None;
+                let _ = app.emit("app:session-end", ());
+            }
             continue;
         }
 
-        // Rumore di fondo: scende subito, risale piano (il parlato non lo gonfia).
-        floor = (floor * 1.002).min(rms).max(1e-4);
+        // Rumore tipico (mediana mobile): il minimo lo sottostimava e il rumore della
+        // stanza passava per parlato, tenendo la sessione aperta.
+        noise = (noise * if rms > noise { 1.002 } else { 0.998 }).max(1e-4);
 
         if !enabled.load(Ordering::Acquire) {
             if was_enabled {
@@ -308,7 +401,14 @@ fn process_audio(
         }
         was_enabled = true;
 
-        stream.accept_waveform(sample_rate, &samples);
+        // AGC per il KWS: il modello perde la wake word se la voce arriva bassa (misurato).
+        // Inviluppo a salita istantanea e discesa lenta; guadagno 1..10 ma senza portare
+        // il rumore di fondo oltre ~0,005 (una stanza rumorosa amplificata lo confonde).
+        envelope = rms.max(envelope * 0.997).max(1e-4);
+        let max_gain = (0.005 / noise).clamp(1.0, 10.0);
+        let gain = (0.1 / envelope).clamp(1.0, max_gain);
+        let boosted: Vec<f32> = samples.iter().map(|s| s * gain).collect();
+        stream.accept_waveform(sample_rate, &boosted);
         while kws.is_ready(&stream) {
             kws.decode(&stream);
             let Some(result) = kws.get_result(&stream) else {
@@ -316,9 +416,15 @@ fn process_audio(
             };
             if !result.keyword.trim().is_empty() {
                 enabled.store(false, Ordering::Release);
+                end_requested.store(false, Ordering::Release);
                 crate::remember_foreground_window();
                 kws.reset(&stream);
-                capture = Some(Capture::new());
+                let settings = crate::current_settings(&app);
+                session = Some((
+                    Session::new(),
+                    noise * settings.vad_ratio(),
+                    settings.idle_seconds,
+                ));
                 let _ = app.emit("app:wake-word", result.keyword);
                 break;
             }
@@ -328,25 +434,39 @@ fn process_audio(
 
 #[cfg(test)]
 mod tests {
-    use super::Capture;
+    use super::{Session, Step};
+
+    fn step(session: &mut Session, loud: bool) -> Step {
+        let block = [0.0_f32; 100]; // 0,1 s a 1 kHz
+        session.push(&block, if loud { 1.0 } else { 0.0 }, 0.5, 2.0, 1000.0)
+    }
 
     #[test]
-    fn capture_ends_after_pause_or_without_speech() {
-        let rate = 1000.0;
-        let block = [0.0_f32; 100]; // 0,1 s
-        let mut command = Capture::new();
-        assert!(!command.push(&block, true, rate));
-        for _ in 0..7 {
-            assert!(!command.push(&block, false, rate));
+    fn session_splits_phrases_and_ends_after_silence() {
+        let mut session = Session::new();
+        for _ in 0..3 {
+            assert!(matches!(step(&mut session, true), Step::Listen));
         }
-        assert!(command.push(&block, false, rate)); // 0,8 s di pausa dopo il parlato
+        for _ in 0..4 {
+            assert!(matches!(step(&mut session, false), Step::Listen));
+        }
+        // 0,5 s di pausa dopo il parlato: la frase parte per Whisper.
+        match step(&mut session, false) {
+            Step::Segment(segment) => assert_eq!(segment.len(), 800),
+            _ => panic!("frase attesa"),
+        }
+        // Dopo una frase bastano idle_secs (2 s) di silenzio per chiudere.
+        assert!((0..19).all(|_| matches!(step(&mut session, false), Step::Listen)));
+        assert!(matches!(step(&mut session, false), Step::End));
+    }
 
-        let mut silent = Capture::new();
-        assert!((0..29).all(|_| !silent.push(&block, false, rate)));
-        assert!(silent.push(&block, false, rate)); // 3 s senza parlato
-
-        let mut talker = Capture::new();
-        assert!((0..59).all(|_| !talker.push(&block, true, rate)));
-        assert!(talker.push(&block, true, rate)); // tetto 6 s
+    #[test]
+    fn session_waits_longer_for_first_command_and_drops_noise() {
+        let mut session = Session::new();
+        assert!(matches!(step(&mut session, true), Step::Listen)); // 0,1 s: tosse
+        assert!((0..5).all(|_| matches!(step(&mut session, false), Step::Listen))); // scartata
+                                                                                    // La tosse non riazzera l'attesa: 4 s dall'inizio, non dalla tosse.
+        assert!((0..33).all(|_| matches!(step(&mut session, false), Step::Listen)));
+        assert!(matches!(step(&mut session, false), Step::End));
     }
 }

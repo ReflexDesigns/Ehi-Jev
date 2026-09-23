@@ -77,3 +77,25 @@ export function checkForUpdate(): Promise<UpdateSummary | null> {
 export function installPendingUpdate(): Promise<void> {
   return invoke<void>('install_pending_update');
 }
+
+/** Chiude la sessione di ascolto continuo (dopo "grazie", "silenzio"…). */
+export function endSession(): Promise<void> {
+  return invoke<void>('end_session');
+}
+
+export interface Settings {
+  /** Lingua per Whisper: 'it' | 'en' | 'auto'. */
+  language: string;
+  /** 1 = serve voce alta … 5 = sente anche la voce bassa. */
+  micSensitivity: number;
+  /** Secondi di silenzio prima che HeyJev smetta di ascoltare. */
+  idleSeconds: number;
+}
+
+export function getSettings(): Promise<Settings> {
+  return invoke<Settings>('get_settings');
+}
+
+export function saveSettings(settings: Settings): Promise<void> {
+  return invoke<void>('save_settings', { settings });
+}

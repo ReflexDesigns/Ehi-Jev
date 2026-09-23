@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import Notch from './components/Notch';
-import { parseCommand } from './lib/commandParser';
+import SettingsPanel from './components/SettingsPanel';
+import { parseCommands } from './lib/commandParser';
 import {
   checkForUpdate,
+  endSession,
   executeAction,
   hideWindow,
   importUpdateTokenFromEnv,
@@ -21,20 +23,22 @@ import type { AppState } from './types';
 /**
  * HeyJev - Direttore Operativo Vocale del PC.
  *
- * Macchina a stati:
- *   idle ──(wake word)──▶ listening ──(pausa/timeout)──▶ processing
- *   processing ──▶ done ──(1.8s)──▶ closing ──▶ idle
+ * «Hey Jev» apre una sessione: il backend Rust ascolta, taglia ogni frase alla
+ * prima pausa e la trascrive con Whisper mentre continua ad ascoltare; la UI
+ * esegue i comandi appena arrivano. La sessione finisce dopo qualche secondo di
+ * silenzio (Impostazioni) oppure con «grazie» / «ok» / «silenzio».
  *
- * Il backend Rust ascolta il microfono (sherpa-onnx), registra il comando dopo
- * la wake word, lo trascrive con Whisper.cpp e manda eventi Tauri alla UI.
+ *   idle ──(wake word)──▶ listening ──(silenzio | grazie)──▶ closing ──▶ idle
  */
 
 const WAKE_RETRY_MS = 5000; // riavvio del rilevatore dopo un errore microfono
+const LAST_RESULT_MS = 700; // l'ultimo esito resta visibile prima di chiudere
 
 export default function App() {
   const [state, setState] = useState<AppState>('setup');
   const [status, setStatus] = useState('Avvio del motore vocale…');
   const [showUpdateTokenSetup, setShowUpdateTokenSetup] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [updateTokenBusy, setUpdateTokenBusy] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState<UpdateSummary | null>(null);
 
@@ -42,15 +46,22 @@ export default function App() {
   const levelRef = useRef(0);
   const wakeReadyRef = useRef(false);
   const wakeStartingRef = useRef(false);
+  const sessionRef = useRef(false); // sessione di ascolto Rust attiva
+  const busyRef = useRef(0); // comandi in esecuzione
+  const holdRef = useRef(false); // pannello aperto: non chiudere da soli
+  const closeWhenIdleRef = useRef(false);
+  const queueRef = useRef<Promise<void>>(Promise.resolve());
 
   const applyState = useCallback((s: AppState) => {
     stateRef.current = s;
     setState(s);
   }, []);
 
-  /** Chiusura: animazione di riassorbimento verso l'alto, poi click-through. */
+  /** Chiusura: la pillola si restringe e risale, poi click-through. */
   const close = useCallback(async () => {
+    holdRef.current = false;
     setShowUpdateTokenSetup(false);
+    setShowSettings(false);
     setUpdateAvailable(null);
     applyState('closing');
     setStatus('');
@@ -69,12 +80,96 @@ export default function App() {
     }, 420);
   }, [applyState]);
 
-  /** Wake word: il notch scende e mostra l'onda mentre Rust registra il comando. */
+  /** Fine sessione (silenzio o «grazie»): chiude appena finiti i comandi in corso. */
+  const finishSession = useCallback(() => {
+    sessionRef.current = false;
+    if (holdRef.current) return;
+    if (busyRef.current > 0) closeWhenIdleRef.current = true;
+    else window.setTimeout(() => void close(), LAST_RESULT_MS);
+  }, [close]);
+
+  /** Pannelli che richiedono l'utente: ferma la sessione e tiene aperto il notch. */
+  const hold = useCallback(async (next: AppState) => {
+    holdRef.current = true;
+    if (sessionRef.current) await endSession();
+    sessionRef.current = false;
+    applyState(next);
+  }, [applyState]);
+
+  const checkUpdates = useCallback(async () => {
+    setStatus('Controllo aggiornamenti…');
+    try {
+      const available = await checkForUpdate();
+      if (!available) return 'HeyJev è aggiornata.';
+      await hold('done');
+      setUpdateAvailable(available);
+      return `È disponibile HeyJev ${available.version}. Conferma con il pulsante per installarla.`;
+    } catch (error) {
+      const message = `Errore: ${String(error)}`;
+      if (message.includes('Token GitHub non configurato')) {
+        await hold('setup');
+        setShowUpdateTokenSetup(true);
+      }
+      return message;
+    }
+  }, [hold]);
+
+  /** Esegue in ordine i comandi di una frase. */
+  const runCommands = useCallback(async (transcript: string) => {
+    let actions = parseCommands(transcript);
+    if (!actions.length) {
+      try {
+        const intent = await parseIntent(transcript);
+        if (intent.action) actions = [intent.action];
+      } catch {
+        // Jev non configurato/irraggiungibile: frase non riconosciuta.
+      }
+    }
+    if (!actions.length) {
+      setStatus(`Non riconosciuto: "${transcript}"`);
+      return;
+    }
+    for (const action of actions) {
+      if (action === 'cancel') {
+        setStatus('Ciao! 👋');
+        await endSession(); // Rust risponde con app:session-end
+        return;
+      }
+      if (action === 'check_update') {
+        setStatus(await checkUpdates());
+        if (holdRef.current) return;
+        continue;
+      }
+      setStatus(await executeAction(action));
+    }
+  }, [checkUpdates]);
+
+  /** Le frasi arrivano mentre si parla: una coda le esegue una alla volta. */
+  const handleTranscript = useCallback((transcript: string) => {
+    queueRef.current = queueRef.current.then(async () => {
+      if (!sessionRef.current || !transcript) return;
+      busyRef.current += 1;
+      try {
+        await runCommands(transcript);
+      } catch (error) {
+        setStatus(`Errore: ${String(error)}`);
+      } finally {
+        busyRef.current -= 1;
+        if (busyRef.current === 0 && closeWhenIdleRef.current) {
+          closeWhenIdleRef.current = false;
+          if (!holdRef.current) window.setTimeout(() => void close(), LAST_RESULT_MS);
+        }
+      }
+    });
+  }, [close, runCommands]);
+
   const onWakeWord = useCallback(async () => {
     if (stateRef.current !== 'idle') return;
+    sessionRef.current = true;
+    closeWhenIdleRef.current = false;
     levelRef.current = 0;
     applyState('listening');
-    setStatus('In ascolto…');
+    setStatus('Ti ascolto…');
     try {
       await showWindow();
       await setListening(true);
@@ -82,69 +177,6 @@ export default function App() {
       setStatus(`Impossibile mostrare HeyJev: ${String(error)}`);
     }
   }, [applyState]);
-
-  /**
-   * Trascrizione pronta -> pipeline:
-   *  1. Intent parsing con Jev/TypeSafe (Rust) -> fallback regex (TS)
-   *  2. Esecuzione azione Windows (Rust)
-   */
-  const handleTranscript = useCallback(
-    async (transcript: string, sttError = '') => {
-      if (stateRef.current !== 'listening' && stateRef.current !== 'processing') return;
-      applyState('processing');
-
-      let result: string;
-      let action: string | null = null;
-      let available: UpdateSummary | null = null;
-      let keepOpen = false;
-      try {
-        if (transcript) {
-          setStatus(transcript);
-          try {
-            const intent = await parseIntent(transcript);
-            if (intent.action) action = intent.action;
-          } catch {
-            // Jev non configurato/irraggiungibile -> fallback regex offline.
-          }
-          if (!action) action = parseCommand(transcript)?.action ?? null;
-        }
-
-        if (action === 'check_update') {
-          setStatus('Controllo release firmate…');
-          available = await checkForUpdate();
-          if (available) {
-            keepOpen = true;
-            result = `È disponibile HeyJev ${available.version}. Conferma con il pulsante per installarla.`;
-          } else {
-            result = 'HeyJev è aggiornata.';
-          }
-        } else if (action === 'cancel') {
-          result = 'Ciao! 👋';
-        } else if (action) {
-          setStatus('Esecuzione…');
-          result = await executeAction(action);
-        } else if (transcript) {
-          result = `Non riconosciuto: "${transcript}"`;
-        } else if (sttError) {
-          result = `Errore trascrizione: ${sttError}`;
-        } else {
-          result = 'Non ho sentito nulla, riprova.';
-        }
-      } catch (e) {
-        result = `Errore: ${String(e)}`;
-        if (action === 'check_update' && result.includes('Token GitHub non configurato')) {
-          keepOpen = true;
-          setShowUpdateTokenSetup(true);
-        }
-      }
-
-      setUpdateAvailable(available);
-      setStatus(result);
-      applyState('done');
-      if (!keepOpen) window.setTimeout(() => void close(), 1800);
-    },
-    [applyState, close],
-  );
 
   const activateWakeWord = useCallback(async () => {
     if (wakeReadyRef.current || wakeStartingRef.current) return;
@@ -167,19 +199,34 @@ export default function App() {
 
   const getLevel = useCallback(() => levelRef.current, []);
 
-  const openUpdateTokenSetup = useCallback(async () => {
+  const openSettings = useCallback(async () => {
+    if (sessionRef.current) return;
     try {
+      holdRef.current = true;
       await setWakeEnabled(false);
       await showWindow();
       await setListening(true);
       setUpdateAvailable(null);
-      setShowUpdateTokenSetup(true);
+      setShowUpdateTokenSetup(false);
+      setShowSettings(true);
       applyState('setup');
-      setStatus('Il token sarà verificato e salvato nel Credential Manager di Windows.');
+      setStatus('Impostazioni');
     } catch (error) {
-      setStatus(`Impossibile aprire la configurazione aggiornamenti: ${String(error)}`);
+      setStatus(`Impossibile aprire le impostazioni: ${String(error)}`);
     }
   }, [applyState]);
+
+  const checkUpdatesFromSettings = useCallback(async () => {
+    setShowSettings(false);
+    applyState('processing');
+    const result = await checkUpdates();
+    setStatus(result);
+    if (stateRef.current === 'processing') {
+      applyState('done');
+      holdRef.current = false;
+      window.setTimeout(() => void close(), 1800);
+    }
+  }, [applyState, checkUpdates, close]);
 
   const persistUpdateToken = useCallback(async (save: () => Promise<void>) => {
     setUpdateTokenBusy(true);
@@ -216,46 +263,37 @@ export default function App() {
     } catch (error) {
       setStatus(`Aggiornamento non riuscito: ${String(error)}`);
       applyState('done');
+      window.setTimeout(() => void close(), 4000);
     }
-  }, [applyState]);
+  }, [applyState, close]);
 
-  // Eventi del backend nativo, più mostra finestra dalla system tray.
+  // Eventi del backend nativo e della system tray.
   useEffect(() => {
     let disposed = false;
     let unlisteners: UnlistenFn[] = [];
     void Promise.all([
-      listen('app:show', () => {
-        if (stateRef.current === 'listening' || stateRef.current === 'processing') return;
-        void showWindow();
-        if (wakeReadyRef.current) {
-          applyState('done');
-          setStatus('Wake word attiva. Sono pronta quando dici «Hey Jev».');
-          window.setTimeout(() => void close(), 1800);
-        } else {
-          applyState('setup');
-          setStatus('Rilevatore non attivo: premi Attiva.');
-        }
-      }),
       listen('app:wake-word', () => void onWakeWord()),
       listen<number>('app:level', (event) => {
         levelRef.current = event.payload;
       }),
-      listen('app:listening-done', () => {
-        if (stateRef.current !== 'listening') return;
-        applyState('processing');
-        setStatus('Trascrizione…');
+      listen('app:segment', () => {
+        if (sessionRef.current && busyRef.current === 0) setStatus('Trascrizione…');
       }),
-      listen<string>('app:transcript', (event) => void handleTranscript(event.payload.trim())),
-      listen<string>('app:transcript-error', (event) => void handleTranscript('', event.payload)),
+      listen<string>('app:transcript', (event) => handleTranscript(event.payload.trim())),
+      listen<string>('app:transcript-error', (event) => {
+        if (sessionRef.current) setStatus(`Errore trascrizione: ${event.payload}`);
+      }),
+      listen('app:session-end', () => finishSession()),
       listen<string>('app:wake-error', (event) => {
         wakeReadyRef.current = false;
+        sessionRef.current = false;
         void showWindow();
         applyState('setup');
         setStatus(`Rilevatore wake word fermato: ${event.payload} Riprovo…`);
         // Microfono cambiato/ricollegato: il nuovo avvio usa il device predefinito attuale.
         window.setTimeout(() => void activateWakeWord(), WAKE_RETRY_MS);
       }),
-      listen('app:configure-update-token', () => void openUpdateTokenSetup()),
+      listen('app:open-settings', () => void openSettings()),
     ]).then((listeners) => {
       if (disposed) listeners.forEach((unlisten) => unlisten());
       else unlisteners = listeners;
@@ -266,25 +304,37 @@ export default function App() {
       unlisteners.forEach((unlisten) => unlisten());
       void setWakeEnabled(false);
     };
-  }, [activateWakeWord, applyState, close, handleTranscript, onWakeWord, openUpdateTokenSetup]);
+  }, [activateWakeWord, applyState, finishSession, handleTranscript, onWakeWord, openSettings]);
 
   return (
-    <Notch
-      state={state}
-      status={status}
-      getLevel={state === 'listening' ? getLevel : undefined}
-      showTokenSetup={showUpdateTokenSetup}
-      tokenBusy={updateTokenBusy}
-      updateAvailable={updateAvailable}
-      onActivate={() => void activateWakeWord()}
-      onSaveUpdateToken={saveUpdateToken}
-      onImportUpdateToken={importTokenFromEnv}
-      onCancelTokenSetup={() => {
-        setShowUpdateTokenSetup(false);
-        if (wakeReadyRef.current) void close();
-      }}
-      onInstallUpdate={() => void installUpdate()}
-      onDismissUpdate={() => void close()}
-    />
+    <>
+      <Notch
+        state={state}
+        status={status}
+        getLevel={state === 'listening' ? getLevel : undefined}
+        showTokenSetup={showUpdateTokenSetup}
+        tokenBusy={updateTokenBusy}
+        updateAvailable={updateAvailable}
+        onActivate={() => void activateWakeWord()}
+        onSaveUpdateToken={saveUpdateToken}
+        onImportUpdateToken={importTokenFromEnv}
+        onCancelTokenSetup={() => {
+          setShowUpdateTokenSetup(false);
+          if (wakeReadyRef.current) void close();
+        }}
+        onInstallUpdate={() => void installUpdate()}
+        onDismissUpdate={() => void close()}
+      />
+      {showSettings ? (
+        <SettingsPanel
+          onClose={() => void close()}
+          onCheckUpdate={() => void checkUpdatesFromSettings()}
+          onConfigureToken={() => {
+            setShowSettings(false);
+            setShowUpdateTokenSetup(true);
+          }}
+        />
+      ) : null}
+    </>
   );
 }

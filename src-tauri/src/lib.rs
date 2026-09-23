@@ -14,11 +14,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, PhysicalPosition, State, Url, WindowEvent,
 };
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -63,7 +63,85 @@ const UPDATE_RELEASES_API: &str = "https://api.github.com/repos/ReflexDesigns/Eh
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const WHISPER_TIMEOUT: Duration = Duration::from_secs(20);
 // Vocabolario dei comandi: guida Whisper tiny verso le frasi attese (IT + EN).
-const WHISPER_PROMPT: &str = "Apri terminale. Apri Claude. Apri ChatGPT. Mostra desktop. Chiudi questo. Controlla aggiornamenti. Annulla. Grazie. Open terminal. Open Claude. Show desktop. Close this. Check for updates. Cancel.";
+// Solo italiano: il prompt misto IT/EN faceva sbagliare "Apri Claude"; l'inglese resta ok (misurato).
+const WHISPER_PROMPT: &str = "Apri terminale. Apri Claude. Apri ChatGPT. Mostra desktop. Chiudi questo. Controlla aggiornamenti. Grazie. Silenzio.";
+
+/// Impostazioni utente, in `%APPDATA%\com.heyjev.app\settings.json`.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct Settings {
+    /// Lingua per Whisper: "it", "en" o "auto".
+    language: String,
+    /// 1 = serve voce alta ... 5 = sente anche la voce bassa.
+    mic_sensitivity: u8,
+    /// Secondi di silenzio dopo i quali la sessione si chiude.
+    pub(crate) idle_seconds: f32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            language: "it".into(),
+            mic_sensitivity: 4,
+            idle_seconds: 2.5,
+        }
+    }
+}
+
+impl Settings {
+    /// Parlato = RMS sopra questo multiplo del rumore tipico (mediana).
+    pub(crate) fn vad_ratio(&self) -> f32 {
+        [5.0, 4.0, 3.0, 2.4, 1.8][usize::from(self.mic_sensitivity.clamp(1, 5)) - 1]
+    }
+}
+
+#[derive(Default)]
+struct SettingsState(Mutex<Settings>);
+
+fn settings_file(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("settings.json"))
+}
+
+pub(crate) fn current_settings(app: &AppHandle) -> Settings {
+    app.state::<SettingsState>()
+        .0
+        .lock()
+        .map(|settings| settings.clone())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_settings(app: AppHandle) -> Settings {
+    current_settings(&app)
+}
+
+#[tauri::command]
+fn save_settings(
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+    settings: Settings,
+) -> Result<(), String> {
+    if !matches!(settings.language.as_str(), "it" | "en" | "auto")
+        || !(1..=5).contains(&settings.mic_sensitivity)
+        || !(1.0..=10.0).contains(&settings.idle_seconds)
+    {
+        return Err("Impostazioni non valide.".into());
+    }
+    let path = settings_file(&app).ok_or("Cartella impostazioni non disponibile.")?;
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?;
+    fs::write(&path, json).map_err(|error| format!("Salvataggio impostazioni fallito: {error}"))?;
+    *state
+        .0
+        .lock()
+        .map_err(|_| "Impostazioni non disponibili.")? = settings;
+    Ok(())
+}
 
 /// Finestra in primo piano al momento della wake word: bersaglio di `close_current`.
 static TARGET_WINDOW: AtomicIsize = AtomicIsize::new(0);
@@ -159,7 +237,11 @@ pub(crate) fn transcribe(
     let model = resource_path(app, "WHISPER_MODEL_PATH", "models/whisper/ggml-tiny.bin")?;
     let binary = resource_path(app, "WHISPER_CPP_BIN", "models/whisper/bin/whisper-cli.exe")?;
     // Whisper tiny con "auto" scambia comandi italiani brevi per altre lingue.
-    let language = env::var("WHISPER_LANGUAGE").unwrap_or_else(|_| "it".into());
+    let language = current_settings(app).language;
+    let threads = thread::available_parallelism()
+        .map(|cores| cores.get().clamp(2, 6))
+        .unwrap_or(4)
+        .to_string();
     let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
     let input = temporary.path().join("command.wav");
     let output = temporary.path().join("transcript");
@@ -173,7 +255,18 @@ pub(crate) fn transcribe(
         .arg("-f")
         .arg(&input)
         .args(["-l", language.as_str(), "--prompt", WHISPER_PROMPT])
-        .args(["-t", "2", "-nt", "-otxt", "-of"])
+        // Greedy (-bs 1 -bo 1) e più thread: ~0,6 s a frase invece di ~1,1 s (misurato).
+        .args([
+            "-t",
+            threads.as_str(),
+            "-bs",
+            "1",
+            "-bo",
+            "1",
+            "-nt",
+            "-otxt",
+            "-of",
+        ])
         .arg(&output)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -619,8 +712,16 @@ pub fn run() {
         })
         .manage(WakeController::default())
         .manage(PendingUpdate::default())
+        .manage(SettingsState::default())
         .setup(|app| {
             load_environment(app.handle());
+            let saved = settings_file(app.handle())
+                .and_then(|path| fs::read_to_string(path).ok())
+                .and_then(|json| serde_json::from_str(&json).ok());
+            if let (Some(saved), Ok(mut settings)) = (saved, app.state::<SettingsState>().0.lock())
+            {
+                *settings = saved;
+            }
             if let Some(window) = app.get_webview_window("main") {
                 if let Some(monitor) = window.current_monitor()? {
                     let bounds = monitor.position();
@@ -631,16 +732,9 @@ pub fn run() {
                 }
                 window.set_ignore_cursor_events(false)?;
             }
-            let show = MenuItem::with_id(app, "show", "Mostra HeyJev", true, None::<&str>)?;
-            let updates = MenuItem::with_id(
-                app,
-                "updates",
-                "Configura aggiornamenti",
-                true,
-                None::<&str>,
-            )?;
+            let settings = MenuItem::with_id(app, "settings", "Impostazioni…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &updates, &quit])?;
+            let menu = Menu::with_items(app, &[&settings, &quit])?;
             let icon = app
                 .default_window_icon()
                 .ok_or_else(|| std::io::Error::other("Icona Tauri mancante; genera le icone."))?
@@ -649,16 +743,24 @@ pub fn run() {
                 .icon(icon)
                 .tooltip("HeyJev — ascolto vocale")
                 .menu(&menu)
+                // Tasto destro: menu. Tasto sinistro: impostazioni dirette.
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => {
-                        let _ = app.emit("app:show", ());
-                    }
-                    "updates" => {
-                        let _ = app.emit("app:configure-update-token", ());
+                    "settings" => {
+                        let _ = app.emit("app:open-settings", ());
                     }
                     "quit" => app.exit(0),
                     _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let _ = tray.app_handle().emit("app:open-settings", ());
+                    }
                 })
                 .build(app)?;
             Ok(())
@@ -666,6 +768,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             wake::start_wake_listener,
             wake::set_wake_enabled,
+            wake::end_session,
+            get_settings,
+            save_settings,
             show_window,
             hide_window,
             set_listening,
