@@ -13,3 +13,4 @@ models/whisper/
 *.log
 .DS_Store
 /release/
+.claude/
