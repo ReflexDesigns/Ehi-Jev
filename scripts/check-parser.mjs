@@ -21,6 +21,17 @@ const cases = {
   'Grazie!': ['cancel'],
   'Silenzio.': ['cancel'],
   'Che tempo fa?': [],
+  'Crea un documento sulla storia di Roma.': ['create_document'],
+  'Scrivimi un file di testo con la lista della spesa, grazie.': ['create_document', 'cancel'],
+  'Crea un documento per il progetto Jev.': ['create_document'],
+  'Preparami un sito per la mia pizzeria.': ['create_project'],
+  "Crea un'app che apre il terminale.": ['create_project'],
+  'Fai un MVP di una todo list.': ['create_project'],
+  'Mostra desktop e crea un documento sulle api.': ['show_desktop', 'create_document'],
+  'Fai silenzio.': ['cancel'],
+  'Cri ha un documento sulla storia della pizza.': ['create_document'],
+  'Scrivi mi un file di testo con la lista della spesa.': ['create_document'],
+  'Fai un sito e web per il mio portfolio.': ['create_project'],
 };
 for (const [text, actions] of Object.entries(cases)) {
   assert.deepEqual(parseCommands(text), actions, text);

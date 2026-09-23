@@ -99,3 +99,17 @@ export function getSettings(): Promise<Settings> {
 export function saveSettings(settings: Settings): Promise<void> {
   return invoke<void>('save_settings', { settings });
 }
+
+/** OpenRouter: documento (Gemini Flash → Download) o progetto (DeepSeek Flash → %USERPROFILE%). */
+export function aiCreate(kind: string, request: string): Promise<string> {
+  return invoke<string>('ai_create', { kind, request });
+}
+
+export function aiKeyConfigured(): Promise<boolean> {
+  return invoke<boolean>('ai_key_configured');
+}
+
+/** Verifica la chiave OpenRouter e la salva nel Credential Manager. */
+export function saveAiKey(key: string): Promise<void> {
+  return invoke<void>('set_ai_key', { key });
+}

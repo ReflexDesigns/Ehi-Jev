@@ -4,6 +4,7 @@ import Notch from './components/Notch';
 import SettingsPanel from './components/SettingsPanel';
 import { parseCommands } from './lib/commandParser';
 import {
+  aiCreate,
   checkForUpdate,
   endSession,
   executeAction,
@@ -27,12 +28,15 @@ import type { AppState } from './types';
  * prima pausa e la trascrive con Whisper mentre continua ad ascoltare; la UI
  * esegue i comandi appena arrivano. La sessione finisce dopo qualche secondo di
  * silenzio (Impostazioni) oppure con «grazie» / «ok» / «silenzio».
+ * «Crea un documento/sito…» avvia una dettatura: tutto ciò che segue fino alla fine
+ * della sessione è la richiesta, eseguita in background da OpenRouter.
  *
  *   idle ──(wake word)──▶ listening ──(silenzio | grazie)──▶ closing ──▶ idle
  */
 
 const WAKE_RETRY_MS = 5000; // riavvio del rilevatore dopo un errore microfono
 const LAST_RESULT_MS = 700; // l'ultimo esito resta visibile prima di chiudere
+const NOTICE_MS = 4000; // avviso a fine lavoro AI
 
 export default function App() {
   const [state, setState] = useState<AppState>('setup');
@@ -49,7 +53,7 @@ export default function App() {
   const sessionRef = useRef(false); // sessione di ascolto Rust attiva
   const busyRef = useRef(0); // comandi in esecuzione
   const holdRef = useRef(false); // pannello aperto: non chiudere da soli
-  const closeWhenIdleRef = useRef(false);
+  const draftRef = useRef<{ kind: string; text: string } | null>(null); // richiesta AI in dettatura
   const queueRef = useRef<Promise<void>>(Promise.resolve());
 
   const applyState = useCallback((s: AppState) => {
@@ -80,13 +84,36 @@ export default function App() {
     }, 420);
   }, [applyState]);
 
-  /** Fine sessione (silenzio o «grazie»): chiude appena finiti i comandi in corso. */
+  /** Esito di un lavoro AI in background: nella sessione aperta, altrimenti avviso di qualche secondo. */
+  const notify = useCallback((message: string) => {
+    setStatus(message);
+    if (sessionRef.current || holdRef.current || stateRef.current === 'setup') return;
+    applyState('done');
+    window.setTimeout(() => {
+      if (stateRef.current === 'done' && !sessionRef.current && !holdRef.current) void close();
+    }, NOTICE_MS);
+  }, [applyState, close]);
+
+  const submitDraft = useCallback(() => {
+    const draft = draftRef.current;
+    draftRef.current = null;
+    if (!draft) return;
+    setStatus(draft.kind === 'create_document' ? 'Gemini scrive il documento…' : 'DeepSeek prepara il progetto…');
+    aiCreate(draft.kind, draft.text).then(notify, (error) => notify(`Errore AI: ${String(error)}`));
+  }, [notify]);
+
+  /** Fine sessione (silenzio o «grazie»): dopo le frasi in coda invia la dettatura e chiude. */
   const finishSession = useCallback(() => {
-    sessionRef.current = false;
-    if (holdRef.current) return;
-    if (busyRef.current > 0) closeWhenIdleRef.current = true;
-    else window.setTimeout(() => void close(), LAST_RESULT_MS);
-  }, [close]);
+    queueRef.current = queueRef.current.then(() => {
+      sessionRef.current = false;
+      submitDraft();
+      if (holdRef.current) return;
+      window.setTimeout(() => {
+        // Non chiudere un avviso AI o una nuova sessione nati nel frattempo.
+        if (stateRef.current === 'listening' && !sessionRef.current) void close();
+      }, LAST_RESULT_MS);
+    });
+  }, [close, submitDraft]);
 
   /** Pannelli che richiedono l'utente: ferma la sessione e tiene aperto il notch. */
   const hold = useCallback(async (next: AppState) => {
@@ -117,6 +144,14 @@ export default function App() {
   /** Esegue in ordine i comandi di una frase. */
   const runCommands = useCallback(async (transcript: string) => {
     let actions = parseCommands(transcript);
+    const draft = draftRef.current;
+    if (draft) {
+      // Dettatura per l'AI: ogni frase si aggiunge alla richiesta, «grazie» la invia.
+      draft.text += ` ${transcript}`;
+      setStatus(`✍️ ${draft.text}`);
+      if (actions[actions.length - 1] === 'cancel') await endSession();
+      return;
+    }
     if (!actions.length) {
       try {
         const intent = await parseIntent(transcript);
@@ -130,6 +165,12 @@ export default function App() {
       return;
     }
     for (const action of actions) {
+      if (action === 'create_document' || action === 'create_project') {
+        draftRef.current = { kind: action, text: transcript };
+        setStatus(`✍️ ${transcript}`);
+        if (actions[actions.length - 1] === 'cancel') await endSession();
+        return;
+      }
       if (action === 'cancel') {
         setStatus('Ciao! 👋');
         await endSession(); // Rust risponde con app:session-end
@@ -155,18 +196,14 @@ export default function App() {
         setStatus(`Errore: ${String(error)}`);
       } finally {
         busyRef.current -= 1;
-        if (busyRef.current === 0 && closeWhenIdleRef.current) {
-          closeWhenIdleRef.current = false;
-          if (!holdRef.current) window.setTimeout(() => void close(), LAST_RESULT_MS);
-        }
       }
     });
-  }, [close, runCommands]);
+  }, [runCommands]);
 
   const onWakeWord = useCallback(async () => {
     if (stateRef.current !== 'idle') return;
     sessionRef.current = true;
-    closeWhenIdleRef.current = false;
+    draftRef.current = null;
     levelRef.current = 0;
     applyState('listening');
     setStatus('Ti ascolto…');
@@ -277,7 +314,7 @@ export default function App() {
         levelRef.current = event.payload;
       }),
       listen('app:segment', () => {
-        if (sessionRef.current && busyRef.current === 0) setStatus('Trascrizione…');
+        if (sessionRef.current && busyRef.current === 0 && !draftRef.current) setStatus('Trascrizione…');
       }),
       listen<string>('app:transcript', (event) => handleTranscript(event.payload.trim())),
       listen<string>('app:transcript-error', (event) => {
@@ -307,24 +344,23 @@ export default function App() {
   }, [activateWakeWord, applyState, finishSession, handleTranscript, onWakeWord, openSettings]);
 
   return (
-    <>
-      <Notch
-        state={state}
-        status={status}
-        getLevel={state === 'listening' ? getLevel : undefined}
-        showTokenSetup={showUpdateTokenSetup}
-        tokenBusy={updateTokenBusy}
-        updateAvailable={updateAvailable}
-        onActivate={() => void activateWakeWord()}
-        onSaveUpdateToken={saveUpdateToken}
-        onImportUpdateToken={importTokenFromEnv}
-        onCancelTokenSetup={() => {
-          setShowUpdateTokenSetup(false);
-          if (wakeReadyRef.current) void close();
-        }}
-        onInstallUpdate={() => void installUpdate()}
-        onDismissUpdate={() => void close()}
-      />
+    <Notch
+      state={state}
+      status={status}
+      getLevel={state === 'listening' ? getLevel : undefined}
+      showTokenSetup={showUpdateTokenSetup}
+      tokenBusy={updateTokenBusy}
+      updateAvailable={updateAvailable}
+      onActivate={() => void activateWakeWord()}
+      onSaveUpdateToken={saveUpdateToken}
+      onImportUpdateToken={importTokenFromEnv}
+      onCancelTokenSetup={() => {
+        setShowUpdateTokenSetup(false);
+        if (wakeReadyRef.current) void close();
+      }}
+      onInstallUpdate={() => void installUpdate()}
+      onDismissUpdate={() => void close()}
+    >
       {showSettings ? (
         <SettingsPanel
           onClose={() => void close()}
@@ -335,6 +371,6 @@ export default function App() {
           }}
         />
       ) : null}
-    </>
+    </Notch>
   );
 }

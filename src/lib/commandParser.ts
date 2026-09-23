@@ -35,6 +35,33 @@ const RULES: CommandRule[] = [
   },
 ];
 
+/**
+ * Richieste all'AI: verbo di creazione + cosa creare. Vince il primo oggetto detto
+ * ("un documento per il progetto" = documento). Il resto della frase è la richiesta.
+ * "Cria", "Cri ha": come Whisper tiny sente a volte "Crea".
+ */
+const CREATE = /\b(?:cr[ei]a(?:mi)?|cri\s*ha|scrivi(?:mi)?|prepara(?:mi)?|genera(?:mi)?|fa(?:i|mmi)|create|write|make|build|generate)\b/i;
+const CREATE_KINDS: [string, RegExp][] = [
+  [
+    'create_document',
+    /\b(?:document[oi]|file|testo|txt|markdown|md|relazion[ei]|articol[oi]|letter[ae]|appunti|note|report|riassunto|guida|document|text|article|letter|notes|summary)\b/i,
+  ],
+  [
+    'create_project',
+    /\b(?:sit[oi]|website|web\s*app|mvp|progett[oi]|app|applicazion[ei]|landing|prototip[oi]|gioco|dashboard|project|site|game)\b/i,
+  ],
+];
+
+function creation(text: string): { action: string; index: number } | null {
+  const verb = CREATE.exec(text);
+  if (!verb) return null;
+  const rest = text.slice(verb.index);
+  const kinds = CREATE_KINDS.map(([action, noun]) => ({ action, at: rest.search(noun) })).filter((k) => k.at >= 0);
+  if (!kinds.length) return null;
+  kinds.sort((a, b) => a.at - b.at);
+  return { action: kinds[0].action, index: verb.index };
+}
+
 /** Parole che chiudono la sessione di ascolto. */
 const STOP = /\b(?:grazie(?:\s*mille)?|silenzio|basta|stop|ok(?:ay)?|annulla|cancel|ciao|thank\s*you)\b/gi;
 
@@ -50,6 +77,11 @@ export function parseCommands(transcript: string): string[] {
     for (const pattern of rule.patterns) {
       for (const match of text.matchAll(pattern)) found.push({ action: rule.action, index: match.index ?? 0 });
     }
+  }
+  // Dopo "crea …" il resto è la richiesta per l'AI, non altri comandi.
+  const create = creation(text);
+  if (create) {
+    found.splice(0, found.length, ...found.filter((command) => command.index < create.index), create);
   }
   found.sort((a, b) => a.index - b.index);
   const lastCommand = found.length ? found[found.length - 1].index : -1;

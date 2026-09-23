@@ -37,6 +37,7 @@ use windows_sys::Win32::{
     },
 };
 
+mod ai;
 mod wake;
 use wake::WakeController;
 
@@ -64,7 +65,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const WHISPER_TIMEOUT: Duration = Duration::from_secs(20);
 // Vocabolario dei comandi: guida Whisper tiny verso le frasi attese (IT + EN).
 // Solo italiano: il prompt misto IT/EN faceva sbagliare "Apri Claude"; l'inglese resta ok (misurato).
-const WHISPER_PROMPT: &str = "Apri terminale. Apri Claude. Apri ChatGPT. Mostra desktop. Chiudi questo. Controlla aggiornamenti. Grazie. Silenzio.";
+const WHISPER_PROMPT: &str = "Apri terminale. Apri Claude. Apri ChatGPT. Mostra desktop. Chiudi questo. Controlla aggiornamenti. Crea un documento. Crea un sito. Grazie. Silenzio.";
 
 /// Impostazioni utente, in `%APPDATA%\com.heyjev.app\settings.json`.
 #[derive(Clone, Serialize, Deserialize)]
@@ -779,7 +780,10 @@ pub fn run() {
             set_update_token,
             import_update_token_from_env,
             check_for_update,
-            install_pending_update
+            install_pending_update,
+            ai::ai_create,
+            ai::ai_key_configured,
+            ai::set_ai_key
         ])
         .run(tauri::generate_context!())
         .expect("errore avviando HeyJev");

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { getSettings, saveSettings, type Settings } from '../lib/osControl';
+import { aiKeyConfigured, getSettings, saveAiKey, saveSettings, type Settings } from '../lib/osControl';
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -9,31 +9,38 @@ interface SettingsPanelProps {
 
 const SENSITIVITY = ['Bassa', 'Medio-bassa', 'Media', 'Alta', 'Molto alta'];
 
-/** Impostazioni (tasto destro sull'icona nella tray → Impostazioni…). */
+/** Impostazioni (icona nella tray: clic, oppure tasto destro → Impostazioni…). */
 export default function SettingsPanel({ onClose, onCheckUpdate, onConfigureToken }: SettingsPanelProps) {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [aiKey, setAiKey] = useState('');
+  const [aiReady, setAiReady] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     getSettings().then(setSettings, (e) => setError(String(e)));
+    aiKeyConfigured().then(setAiReady, () => undefined);
   }, []);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!settings) return;
+    setSaving(true);
     try {
+      if (aiKey.trim()) await saveAiKey(aiKey);
       await saveSettings(settings);
       onClose();
     } catch (e) {
       setError(String(e));
+    } finally {
+      setSaving(false);
     }
   };
 
   const update = (patch: Partial<Settings>) => setSettings((current) => (current ? { ...current, ...patch } : current));
 
   return (
-    <form className="token-panel settings-panel" onSubmit={(event) => void submit(event)}>
-      <div className="token-panel-title">Impostazioni HeyJev</div>
+    <form className="notch-panel" onSubmit={(event) => void submit(event)}>
       {settings ? (
         <>
           <label className="settings-row">
@@ -59,7 +66,7 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onConfigureToken
           </label>
           <label className="settings-row">
             <span>
-              Smetti di ascoltare dopo <b>{settings.idleSeconds.toFixed(1)} s</b> di silenzio
+              Chiudi dopo <b>{settings.idleSeconds.toFixed(1)} s</b> di silenzio
             </span>
             <input
               type="range"
@@ -70,21 +77,32 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onConfigureToken
               onChange={(e) => update({ idleSeconds: Number(e.target.value) })}
             />
           </label>
+          <label className="settings-row">
+            <span>Chiave OpenRouter</span>
+            <input
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={aiKey}
+              onChange={(e) => setAiKey(e.target.value)}
+              placeholder={aiReady ? 'Salvata ✓' : 'sk-or-…'}
+            />
+          </label>
         </>
       ) : null}
       {error ? <p className="settings-error">{error}</p> : null}
-      <div className="token-panel-actions">
-        <button type="button" className="secondary-button" onClick={onCheckUpdate}>
-          Controlla aggiornamenti
+      <div className="panel-actions">
+        <button type="button" className="pill-button secondary" onClick={onCheckUpdate}>
+          Aggiornamenti
         </button>
-        <button type="button" className="secondary-button" onClick={onConfigureToken}>
-          Token GitHub…
+        <button type="button" className="pill-button secondary" onClick={onConfigureToken}>
+          Token GitHub
         </button>
-        <button type="button" className="secondary-button" onClick={onClose}>
+        <button type="button" className="pill-button secondary" onClick={onClose}>
           Chiudi
         </button>
-        <button type="submit" disabled={!settings}>
-          Salva
+        <button type="submit" className="pill-button" disabled={!settings || saving}>
+          {saving ? 'Verifico…' : 'Salva'}
         </button>
       </div>
     </form>

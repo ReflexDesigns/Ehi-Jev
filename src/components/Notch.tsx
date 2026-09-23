@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import SoundWave from './SoundWave';
 import type { UpdateSummary } from '../lib/osControl';
 import type { AppState } from '../types';
@@ -17,13 +17,13 @@ interface NotchProps {
   onCancelTokenSetup?: () => void;
   onInstallUpdate?: () => void;
   onDismissUpdate?: () => void;
+  /** Pannello che espande l'isola (Impostazioni). */
+  children?: ReactNode;
 }
 
 /**
- * "The Notch" - overlay fluttuante frameless in cima allo schermo.
- *
- * Il movimento (discesa dall'orlo / riassorbimento) è gestito via CSS:
- * la classe .notch-<state> controlla la transform translateY.
+ * "The Notch": isola nera stile Dynamic Island attaccata al bordo alto dello schermo.
+ * Apertura, chiusura ed espansione sono solo CSS (classi .notch-<state>, .notch-expanded).
  */
 export default function Notch({
   state,
@@ -38,8 +38,10 @@ export default function Notch({
   onCancelTokenSetup,
   onInstallUpdate,
   onDismissUpdate,
+  children,
 }: NotchProps) {
   const [token, setToken] = useState('');
+  const expanded = showTokenSetup || Boolean(children) || Boolean(updateAvailable);
 
   const submitToken = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -49,66 +51,62 @@ export default function Notch({
   };
 
   return (
-    <>
-      <div className={`notch notch-${state}`}>
-        <div className="notch-inner">
-          <div className="notch-icon">
-            <img src="/app-icon.svg" alt="HeyJev" draggable={false} />
-          </div>
-          <div className="notch-body">
-            <SoundWave state={state} getLevel={getLevel} />
-            <div className="notch-status">{status}</div>
-          </div>
-          {state === 'setup' && onActivate ? (
-            <button type="button" className="activate-button" onClick={onActivate}>
-              Attiva
-            </button>
-          ) : null}
-          {updateAvailable && onInstallUpdate ? (
-            <button type="button" className="update-button" onClick={onInstallUpdate}>
-              Installa {updateAvailable.version}
-            </button>
-          ) : null}
-          {updateAvailable && onDismissUpdate ? (
-            <button type="button" className="update-button secondary-button" onClick={onDismissUpdate}>
-              Più tardi
-            </button>
-          ) : null}
-        </div>
+    <div className={`notch notch-${state}${expanded ? ' notch-expanded' : ''}`}>
+      <div className="notch-row">
+        <div className="notch-status">{status}</div>
+        {state === 'setup' && !expanded && onActivate ? (
+          <button type="button" className="pill-button" onClick={onActivate}>
+            Attiva
+          </button>
+        ) : (
+          <SoundWave state={state} getLevel={getLevel} />
+        )}
       </div>
 
+      {updateAvailable ? (
+        <div className="panel-actions notch-panel">
+          <button type="button" className="pill-button secondary" onClick={onDismissUpdate}>
+            Più tardi
+          </button>
+          <button type="button" className="pill-button" onClick={onInstallUpdate}>
+            Installa {updateAvailable.version}
+          </button>
+        </div>
+      ) : null}
+
       {showTokenSetup ? (
-        <form className="token-panel" onSubmit={(event) => void submitToken(event)}>
-          <div className="token-panel-title">Aggiornamenti privati</div>
+        <form className="notch-panel" onSubmit={(event) => void submitToken(event)}>
           <p>
-            Token fine-grained con <code>Contents: read</code> solo su Ehi-Jev. Verrà verificato e
+            Token GitHub fine-grained con <code>Contents: read</code> solo su Ehi-Jev. Verrà verificato e
             salvato nel Credential Manager di Windows, non nel browser né nell’EXE.
           </p>
-          <label htmlFor="github-update-token">Token GitHub</label>
           <input
-            id="github-update-token"
+            className="wide"
             type="password"
             autoComplete="off"
             spellCheck={false}
             value={token}
             onChange={(event) => setToken(event.target.value)}
             placeholder="github_pat_…"
+            aria-label="Token GitHub"
           />
-          <div className="token-panel-actions">
-            <button type="submit" disabled={tokenBusy || !token.trim()}>
-              {tokenBusy ? 'Verifico…' : 'Salva in Windows'}
-            </button>
+          <div className="panel-actions">
             {onImportUpdateToken ? (
-              <button type="button" className="secondary-button" disabled={tokenBusy} onClick={() => void onImportUpdateToken()}>
+              <button type="button" className="pill-button secondary" disabled={tokenBusy} onClick={() => void onImportUpdateToken()}>
                 Importa da .env.local
               </button>
             ) : null}
-            <button type="button" className="secondary-button" disabled={tokenBusy} onClick={onCancelTokenSetup}>
+            <button type="button" className="pill-button secondary" disabled={tokenBusy} onClick={onCancelTokenSetup}>
               Annulla
+            </button>
+            <button type="submit" className="pill-button" disabled={tokenBusy || !token.trim()}>
+              {tokenBusy ? 'Verifico…' : 'Salva'}
             </button>
           </div>
         </form>
       ) : null}
-    </>
+
+      {children}
+    </div>
   );
 }

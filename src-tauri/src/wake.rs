@@ -33,6 +33,8 @@ pub fn start_wake_listener(
     controller: State<'_, WakeController>,
 ) -> Result<(), String> {
     if controller.started.swap(true, Ordering::AcqRel) {
+        // UI ricaricata (es. HMR in sviluppo): il listener gira già, basta riattivarlo.
+        controller.enabled.store(true, Ordering::Release);
         return Ok(());
     }
 

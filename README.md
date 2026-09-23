@@ -17,6 +17,10 @@ Pronuncia **“Hey Jev”** una volta: HeyJev resta in ascolto ed esegue ogni fr
 | “Chiudi questo” / “Close this” | “Chiudi la finestra”, “Close the window” | Chiude (come **Alt + F4**) la finestra attiva quando hai detto “Hey Jev”; mai HeyJev né il desktop |
 | “Grazie” / “Silenzio” / “Ok” | “Basta”, “Stop”, “Annulla”, “Thank you” | Chiude la sessione di ascolto |
 | “Check the update” / “Controlla aggiornamenti” | “Check for updates”, “Verifica aggiornamenti” | Cerca una release privata firmata e mostra il pulsante di installazione; l’update parte solo dopo il clic |
+| “Crea un documento su …” | “Scrivimi un file di testo / una relazione / un articolo …” | Gemini Flash (OpenRouter) scrive il documento `.md` (o `.txt`) in **Download** e lo apre |
+| “Crea un sito / un MVP / un’app …” | “Preparami un progetto / una landing / un prototipo …” | DeepSeek Flash (OpenRouter) crea la cartella `C:\Users\<utente>\<nome-progetto>` con il progetto e la apre |
+
+**Richieste all’AI**: dopo “crea un documento/sito…” tutto quello che dici fino a **“grazie”** (o al silenzio) diventa la richiesta. Il lavoro gira in background e un avviso nell’isola dice quando è pronto. Serve una chiave OpenRouter: **Impostazioni → Chiave OpenRouter** (verificata e salvata nel Credential Manager di Windows) oppure `OPENROUTER_API_KEY` in `.env.local`. I percorsi dei file generati sono validati: il modello non può scrivere fuori dalla cartella del progetto.
 
 La lista è definita nel parser offline (`src/lib/commandParser.ts`) e nella classificazione Jev (`src-tauri/src/lib.rs`). Se la trascrizione non corrisponde a un intent consentito, HeyJev non esegue comandi di sistema generici.
 
