@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Base Gradient -->
+    <radialGradient id="bgGradient" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1f2838" />
+      <stop offset="70%" stop-color="#121620" />
+      <stop offset="100%" stop-color="#0a0d14" />
+    </radialGradient>
+
+    <!-- Glowing Outer Aura -->
+    <radialGradient id="outerGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="60%" stop-color="#00f2fe" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#00f2fe" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Neon Ribbon Gradient (Cyan -> Electric Purple) -->
+    <linearGradient id="neonGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f2fe" />
+      <stop offset="40%" stop-color="#38ef7d" />
+      <stop offset="70%" stop-color="#7f00ff" />
+      <stop offset="100%" stop-color="#e100ff" />
+    </linearGradient>
+
+    <!-- Inner Notch Plate Gradient -->
+    <linearGradient id="plateGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#18202e" />
+      <stop offset="100%" stop-color="#0d111a" />
+    </linearGradient>
+
+    <!-- Intense Blur Glow Filter -->
+    <filter id="glowFilter" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur />
+      <feGaussianBlur />
+      
+        
+        
+        
+      
+    </filter>
+
+    <!-- Bevel & Shadow Filter for 3D Notch -->
+    <filter id="shadow3D" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" flood-color="#000000" flood-opacity="0.6" />
+    </filter>
+  </defs>
+
+  <!-- Outer Glow Ring -->
+  <rect width="512" height="512" rx="110" fill="url(#outerGlow)" />
+
+  <!-- Main Dark Rounded Base -->
+  <rect width="440" height="440" x="36" y="36" rx="90" fill="url(#bgGradient)" stroke="#00f2fe" stroke-opacity="0.5" stroke-width="2" filter="url(#shadow3D)" />
+
+  <!-- Top Notch Housing Plate -->
+  <path d="M 120 72 
+           H 392 
+           C 370 72, 360 100, 340 100 
+           H 172 
+           C 152 100, 142 72, 120 72 Z" fill="url(#plateGradient)" stroke="#00f2fe" stroke-opacity="0.3" stroke-width="2" />
+
+  <!-- Top Notch Camera / Micro Dot -->
+  <circle cx="256" cy="86" r="8" fill="#00f2fe" filter="url(#glowFilter)" />
+
+  <!-- Inner Metallic Beveled Shield Plate -->
+  <path d="M 100 125 
+           L 180 125 
+           L 210 160 
+           L 302 160 
+           L 332 125 
+           L 412 125 
+           L 412 320 
+           L 256 428 
+           L 100 320 Z" fill="url(#plateGradient)" stroke="#1a2332" stroke-width="4" filter="url(#shadow3D)" />
+
+  <!-- Outer Neon Border of Shield -->
+  <path d="M 100 125 
+           L 180 125 
+           L 210 160 
+           L 302 160 
+           L 332 125 
+           L 412 125 
+           L 412 320 
+           L 256 428 
+           L 100 320 Z" fill="none" stroke="url(#neonGradient)" stroke-width="3" stroke-opacity="0.7" filter="url(#glowFilter)" />
+
+  <!-- Central Futuristic 'J' Fluid Wave Ribbon -->
+  <g filter="url(#glowFilter)">
+    <!-- Top J Bar -->
+    <path d="M 220 205 L 310 205 L 350 170 L 290 205 Z" fill="url(#neonGradient)" />
+
+    <!-- Main Dynamic J Body Wave -->
+    <path d="M 350 170 
+             C 290 250, 310 320, 260 370 
+             C 220 405, 160 380, 160 330 
+             C 160 295, 200 280, 220 310 
+             C 200 340, 230 365, 260 340 
+             C 290 310, 275 250, 350 170 Z" fill="url(#neonGradient)" />
+
+    <!-- Inner Soundwave Flow Lines -->
+    <path d="M 335 185 C 280 255, 295 315, 255 355" fill="none" stroke="#ffffff" stroke-width="2" stroke-opacity="0.8" />
+    <path d="M 320 200 C 270 260, 280 310, 245 345" fill="none" stroke="#00f2fe" stroke-width="2" stroke-opacity="0.9" />
+  </g>
+</svg>

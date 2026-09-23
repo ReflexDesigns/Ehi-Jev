@@ -1,0 +1,138 @@
+/* ============================================================
+   HeyJev - Design System "The Notch"
+   Finestra trasparente, overlay pillola fluttuante in cima.
+   ============================================================ */
+
+:root {
+  --cyan: #00f2fe;
+  --green: #38ef7d;
+  --purple: #7f00ff;
+  --magenta: #e100ff;
+  --bg-top: rgba(24, 32, 46, 0.92);
+  --bg-bottom: rgba(13, 17, 26, 0.92);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent; /* obbligatorio: finestra Tauri trasparente */
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  user-select: none;
+  cursor: default;
+}
+
+/* ---------- The Notch ---------- */
+
+.notch {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  width: min(640px, 96vw);
+  padding: 6px;
+  transform: translate(-50%, -130%);
+  transition: transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1); /* spring-ish */
+  will-change: transform;
+  z-index: 10;
+}
+
+/* Discesa dall'orlo superiore del monitor */
+.notch-listening,
+.notch-processing,
+.notch-done,
+.notch-setup {
+  transform: translate(-50%, 6px);
+}
+
+/* Riassorbimento verso l'alto */
+.notch-closing {
+  transform: translate(-50%, -130%);
+}
+
+.notch-inner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+  border: 1px solid rgba(0, 242, 254, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.4),
+    0 10px 40px rgba(0, 0, 0, 0.55),
+    0 0 24px rgba(0, 242, 254, 0.25),
+    0 0 48px rgba(127, 0, 255, 0.25);
+  backdrop-filter: blur(18px) saturate(140%);
+}
+
+/* Icona dell'app (asset app-icon.svg in /public) */
+.notch-icon {
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #1f2838, #0a0d14);
+  border: 1px solid rgba(0, 242, 254, 0.4);
+  box-shadow: 0 0 18px rgba(0, 242, 254, 0.35);
+}
+
+.notch-icon img {
+  width: 32px;
+  height: 32px;
+}
+
+.notch-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.soundwave {
+  width: 100%;
+  height: 52px;
+  display: block;
+}
+
+.notch-status {
+  font-size: 12.5px;
+  letter-spacing: 0.3px;
+  color: rgba(255, 255, 255, 0.85);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 16px;
+}
+
+.activate-button {
+  position: absolute;
+  top: 50%;
+  right: 24px;
+  transform: translateY(-50%);
+  padding: 9px 14px;
+  border: 1px solid rgba(0, 242, 254, 0.35);
+  border-radius: 12px;
+  background: linear-gradient(120deg, #466ff0, #8050d8);
+  color: white;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 5px 20px rgba(101, 79, 220, 0.28);
+}
+
+.activate-button:hover {
+  filter: brightness(1.12);
+}

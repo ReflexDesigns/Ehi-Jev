@@ -1,0 +1,15 @@
+node_modules/
+dist/
+src-tauri/target/
+target/
+.env
+.env.local
+.env.*.local
+*.key
+*.key.pub
+models/*.bin
+models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/
+public/models/*.pv
+public/models/*.ppn
+*.log
+.DS_Store

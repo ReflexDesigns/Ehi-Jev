@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Capability di default per la finestra overlay 'main'","local":true,"windows":["main"],"permissions":["core:default","core:event:allow-listen","core:event:allow-unlisten"]}}
