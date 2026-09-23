@@ -15,7 +15,7 @@ Dici «Hey Jev»: un’isola nera stile Dynamic Island cola giù dall’alto, ti
 | 🪟 **Controlla Windows** | Mostra il desktop, chiude la finestra attiva, apre il terminale, Claude o ChatGPT. |
 | 📝 **Scrive documenti** | «Crea un documento sulla storia di Roma» → Gemini Flash scrive un file Markdown in **Download** e lo apre. |
 | 🌐 **Crea siti e MVP** | «Preparami un sito per una pizzeria» → DeepSeek Flash genera il progetto completo in `C:\Users\<tu>\<nome-progetto>` e lo apre nel browser. |
-| 🎯 **Capisce come parli tu** | Deepgram trascrive in tempo reale; i comandi noti partono all’istante, le frasi libere («fammi partire Spotify», «apri il gestionale dell’officina») le traduce Gemini Flash nel comando giusto in meno di un secondo. |
+| 🎯 **Capisce come parli tu** | Deepgram trascrive in tempo reale; i comandi noti partono all’istante, le frasi libere («metti su SmileSync», «apri il programma per i file») le interpreta **Jev** (TypeSafe) in circa 0,4 secondi. |
 | 🤐 **Laconico** | Esegue e basta: non fa conversazione e non risponde a domande di cultura. Parla (voce Aura 2 **Maia**) solo per errori e avvisi, e se parli sopra si zittisce. |
 | 🔁 **Conversazione continua** | Una sola «Hey Jev», poi quanti comandi vuoi, anche nella stessa frase («apri il terminale e mostra il desktop»). «Grazie» chiude. |
 | 🎓 **Impara la tua voce** | Al primo avvio un tutorial di un minuto: dici «Hey Jev» e leggi qualche frase. HeyJev impara come ti sente. |
@@ -26,7 +26,7 @@ Dici «Hey Jev»: un’isola nera stile Dynamic Island cola giù dall’alto, ti
 
 - La wake word «Hey Jev» è **sempre offline** (sherpa-onnx): finché non la dici, niente audio esce dal PC.
 - Dopo «Hey Jev», con la chiave Deepgram, l’audio della conversazione va a **Deepgram** per la trascrizione in tempo reale e il testo delle risposte torna come voce. Senza chiave (o scegliendo *Whisper, sul PC* nelle Impostazioni) la trascrizione resta locale con Whisper.cpp.
-- A **OpenRouter** va il testo delle frasi libere (Gemini) e delle richieste di documenti e siti; a Jev/TypeSafe solo se configuri la sua chiave facoltativa; a GitHub il controllo aggiornamenti.
+- A **Jev/TypeSafe** va il testo delle frasi che il parser locale non riconosce; a **OpenRouter** le richieste di documenti e siti (e le frasi libere solo se Jev non risponde); a GitHub il controllo aggiornamenti.
 - Le chiavi API stanno nel **Credential Manager di Windows**: non nel codice, non nell’installer, non in file di testo.
 - HeyJev esegue solo le azioni elencate qui sotto: non è un agente con accesso libero al PC. I file generati dall’AI non possono uscire dalla cartella del progetto.
 
@@ -35,7 +35,7 @@ Dici «Hey Jev»: un’isola nera stile Dynamic Island cola giù dall’alto, ti
 1. Scarica `HeyJev_<versione>_x64-setup.exe` dall’**[ultima release](https://github.com/ReflexDesigns/Ehi-Jev/releases/latest)**.
 2. Avvialo: si installa per il tuo utente, senza permessi di amministratore. Windows SmartScreen può avvisare che l’editore è sconosciuto (l’installer non ha una firma Authenticode): **Ulteriori informazioni → Esegui comunque**.
 3. Al primo avvio parte il **tutorial voce**.
-4. Clic sull’icona di HeyJev nella system tray → **Impostazioni**: incolla la chiave **Deepgram** (ascolto e voce) e la chiave **OpenRouter** (risposte, documenti, siti). Senza chiavi HeyJev funziona lo stesso, offline, con i soli comandi.
+4. Clic sull’icona di HeyJev nella system tray → **Impostazioni**: incolla le chiavi **Deepgram** (ascolto e voce), **Jev** (esegue i comandi detti a modo tuo) e **OpenRouter** (documenti e siti). Senza chiavi HeyJev funziona lo stesso, offline, con i comandi diretti.
 
 Requisiti: Windows 10/11 x64, microfono, WebView2 (già presente su Windows 11).
 
@@ -54,7 +54,7 @@ Dopo «Hey Jev» HeyJev resta in ascolto ed esegue ogni frase appena fai una pau
 | «Crea un sito / un MVP / un’app …» | «Preparami una landing / un prototipo…» | Progetto in `C:\Users\<tu>\<nome-progetto>` |
 | «Controlla aggiornamenti» | «Check for updates» | Cerca una nuova versione; si installa solo dopo il tuo clic |
 | «Grazie» / «Silenzio» | «Ok», «Basta», «Stop», «Thank you» | Chiude l’ascolto |
-| Qualsiasi altra frase | «Fammi vedere il desktop», «Metti su SmileSync» | Gemini la traduce nel comando giusto; se non è un comando (es. «che circonferenza ha la Terra?») non fa niente |
+| Qualsiasi altra frase | «Fammi vedere il desktop», «Metti su SmileSync» | Jev sceglie il comando giusto; se non è un comando (es. «che circonferenza ha la Terra?») non fa niente |
 
 **Richieste all’AI**: dopo «crea un documento/sito…» tutto quello che dici fino a «grazie» (o al silenzio) diventa la richiesta. Il lavoro va avanti in background: l’isola e la notifica ti dicono quando è pronto.
 
@@ -76,8 +76,8 @@ Clic sull’icona nella system tray (o tasto destro → **Impostazioni…**):
 - sensibilità del microfono e secondi di silenzio prima di smettere di ascoltare;
 - notifica di Windows a lavoro AI finito;
 - **Chiave Deepgram** ([console.deepgram.com](https://console.deepgram.com)): ascolto in streaming (nova-3, italiano) e voce Aura 2 Maia;
-- **Chiave OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/keys)): frasi libere → comando (Gemini 3.5 Flash-Lite), documenti (Gemini Flash) e siti (DeepSeek Flash). Si paga a consumo su OpenRouter;
-- **Chiave Jev** (facoltativa): classifica con Jev/TypeSafe le frasi libere che il riconoscimento locale non capisce;
+- **Chiave Jev** ([typesafe.ai](https://docs.typesafe.ai/api)): Jev, il modello System One di TypeSafe, sceglie in circa 0,4 s il comando e l’app per le frasi dette a modo tuo;
+- **Chiave OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/keys)): documenti (Gemini Flash) e siti (DeepSeek Flash); Gemini 3.5 Flash-Lite fa anche da riserva se Jev non risponde. Si paga a consumo su OpenRouter;
 - tutorial voce e controllo aggiornamenti.
 
 Le chiavi vengono verificate prima del salvataggio.
@@ -90,7 +90,8 @@ Le chiavi vengono verificate prima del salvataggio.
 | Wake word | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) keyword spotting, offline, in Rust + CPAL; riserva Whisper imparata nel tutorial |
 | Ascolto | [Deepgram](https://deepgram.com) nova-3 in streaming WebSocket (italiano, fine frase automatica, nomi delle app come parole chiave); senza chiave [whisper.cpp](https://github.com/ggml-org/whisper.cpp) locale |
 | Voce | Deepgram Aura 2 `aura-2-maia-it` via WebSocket, solo per errori e avvisi; si zittisce se parli (l’eco delle casse è riconosciuta dal contenuto) |
-| Comandi | Parser locale istantaneo e tollerante (`src/lib/commandParser.ts`); frasi libere a Gemini 3.5 Flash-Lite con strumento obbligatorio, ~0,7 s (`src-tauri/src/chat.rs`) |
+| Comandi | Parser locale istantaneo e tollerante (`src/lib/commandParser.ts`); frasi libere a **Jev** (TypeSafe System One): azione e app in una richiesta, ~0,4 s; se tarda oltre 1,2 s corre anche Gemini 3.5 Flash-Lite e vince il primo (`src-tauri/src/chat.rs`) |
+| Esecuzione | Codice Rust di HeyJev sul PC: app del menu Start, scorciatoie Windows, finestre |
 | App installate | `Get-StartApps` + ricerca tollerante del nome (`src-tauri/src/apps.rs`) |
 | AI | [OpenRouter](https://openrouter.ai): Gemini Flash per i documenti, DeepSeek Flash per i progetti |
 | L’isola | Finestra trasparente sempre in primo piano; animazioni solo CSS |
@@ -123,7 +124,7 @@ src-tauri/src/lib.rs     comandi Tauri, Whisper, azioni Windows, impostazioni, u
 src-tauri/src/wake.rs    microfono, wake word, sessione di ascolto, barge-in, tutorial
 src-tauri/src/deepgram.rs ascolto in streaming e voce Aura 2 Maia
 src-tauri/src/speaker.rs  altoparlanti: coda audio che si svuota all'istante
-src-tauri/src/chat.rs     frase libera → strumento (Gemini)
+src-tauri/src/chat.rs     frase libera → comando (Jev, riserva Gemini)
 src-tauri/src/apps.rs    ricerca e avvio delle app installate
 src-tauri/src/ai.rs      documenti e progetti via OpenRouter
 scripts/                 setup modelli, versioni, test del parser

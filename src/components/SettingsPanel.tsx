@@ -136,14 +136,14 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onTutorial }: Se
             />
           </label>
           <label className="settings-row">
-            <span>Chiave Jev (facoltativa)</span>
+            <span>Chiave Jev (esegue i comandi)</span>
             <input
               type="password"
               autoComplete="off"
               spellCheck={false}
               value={jevKey}
               onChange={(e) => setJevKey(e.target.value)}
-              placeholder={jevReady ? 'Salvata ✓' : 'per le frasi libere'}
+              placeholder={jevReady ? 'Salvata ✓' : 'chiave TypeSafe'}
             />
           </label>
         </>

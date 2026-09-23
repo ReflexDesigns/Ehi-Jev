@@ -1,7 +1,8 @@
-//! Esecutore laconico: le frasi che il parser locale non riconosce vanno a Gemini Flash
-//! (OpenRouter), che deve solo scegliere lo strumento giusto. Niente conversazione, niente
-//! risposte a domande generiche: se non è un comando per il PC, `not_a_command`.
-//! Ogni strumento scelto arriva al frontend come `app:tool` e viene eseguito subito.
+//! Esecutore laconico: le frasi che il parser locale non riconosce vanno a **Jev**
+//! (TypeSafe SystemOne), che sceglie in una sola richiesta l'azione e l'app. Senza chiave
+//! Jev fa da riserva Gemini Flash (OpenRouter) con strumento obbligatorio. Niente
+//! conversazione: se non è un comando per il PC, `not_a_command`. Ogni scelta arriva al
+//! frontend come `app:tool` e viene eseguita subito.
 
 use std::{
     sync::{
@@ -80,6 +81,115 @@ pub async fn interpret(app: AppHandle, text: String) -> Result<Vec<String>, Stri
 }
 
 async fn choose(app: &AppHandle, text: &str) -> Result<Vec<String>, String> {
+    let calls = match crate::jev_key() {
+        Some(key) => race(&key, text).await?,
+        None => gemini_choose(text).await?,
+    };
+    for (name, args) in &calls {
+        let _ = app.emit("app:tool", json!({ "name": name, "args": args }));
+    }
+    let names: Vec<String> = calls.into_iter().map(|(name, _)| name).collect();
+    if let Ok(mut history) = HISTORY.lock() {
+        history.push(json!({ "role": "user", "content": text }));
+        history.push(json!({ "role": "assistant", "content": format!("[{}]", names.join(", ")) }));
+        let excess = history.len().saturating_sub(MAX_TURNS * 2);
+        history.drain(..excess);
+    }
+    Ok(names)
+}
+
+/// Azioni tra cui sceglie Jev (nome strumento, quando sceglierla).
+const ACTIONS: [(&str, &str); 11] = [
+    ("open_app", "Aprire, avviare o far partire un'app o un programma installato."),
+    ("open_terminal", "Aprire il terminale o il prompt dei comandi."),
+    ("open_claude", "Aprire Claude."),
+    ("open_chatgpt", "Aprire ChatGPT."),
+    ("show_desktop", "Mostrare il desktop o ridurre a icona tutte le finestre."),
+    ("close_window", "Chiudere la finestra o l'app che si sta usando."),
+    ("check_updates", "Controllare se c'è un aggiornamento di HeyJev."),
+    ("create_document", "Scrivere o creare un documento, un testo, una relazione, un file di testo."),
+    ("create_website", "Creare un sito, una landing page, un MVP, un'app o un prototipo."),
+    ("end_conversation", "Salutare, ringraziare, dire basta o chiudere la conversazione."),
+    ("not_a_command", "Una domanda, un calcolo, una curiosità o una frase che non chiede un'azione sul PC."),
+];
+/// Sotto questa confidenza Jev non è sicuro: meglio non fare niente che fare la cosa sbagliata.
+const MIN_CONFIDENCE: f64 = 0.5;
+/// …a meno che non sia sicuro dell'app ("il gestionale dell'officina" → PitStop, misurato 0,76).
+const APP_CONFIDENCE: f64 = 0.7;
+/// Limite di opzioni per domanda dell'API (255), una è "none".
+const MAX_APPS: usize = 254;
+
+/// Jev risponde di solito in ~0,4 s, ma a volte supera i 5 s (misurato: 3 richieste su 11).
+/// Se entro `HEDGE` non ha risposto parte anche Gemini (~0,7 s): vince il primo che riesce.
+const HEDGE: Duration = Duration::from_millis(1200);
+
+async fn race(key: &str, text: &str) -> Result<Vec<(String, Value)>, String> {
+    let jev = jev_choose(key, text);
+    tokio::pin!(jev);
+    match tokio::time::timeout(HEDGE, &mut jev).await {
+        Ok(Ok(calls)) => return Ok(calls),
+        Ok(Err(_)) => return gemini_choose(text).await, // Jev ha risposto con un errore
+        Err(_) => {}                                     // Jev in ritardo: si corre in due
+    }
+    let gemini = gemini_choose(text);
+    tokio::pin!(gemini);
+    tokio::select! {
+        calls = &mut jev => match calls { Ok(calls) => Ok(calls), Err(_) => gemini.await },
+        calls = &mut gemini => match calls { Ok(calls) => Ok(calls), Err(_) => jev.await },
+    }
+}
+
+/// Jev sceglie l'azione e, per "apri …", l'app: due domande nella stessa richiesta.
+async fn jev_choose(key: &str, text: &str) -> Result<Vec<(String, Value)>, String> {
+    let actions: serde_json::Map<String, Value> = ACTIONS
+        .iter()
+        .map(|(name, about)| (name.to_string(), json!(about)))
+        .collect();
+    let mut apps = serde_json::Map::new();
+    for name in crate::apps::cached() {
+        if apps.len() == MAX_APPS {
+            break;
+        }
+        apps.insert(name, Value::Null);
+    }
+    apps.insert("none".into(), json!("Nessuna app della lista."));
+    let questions = json!({
+        "action": {
+            "type": "choice",
+            "instructions": "Frase detta a voce all'assistente di un PC Windows: che azione chiede?",
+            "criteria": actions
+        },
+        "app": {
+            "type": "choice",
+            "instructions": "Se la frase chiede di aprire un'app, quale di queste? Altrimenti none.",
+            "criteria": apps
+        }
+    });
+    let answers = crate::jev_ask(key, text, questions).await?;
+    Ok(vec![pick(&answers, text)])
+}
+
+/// Dalla risposta di Jev allo strumento da eseguire.
+fn pick(answers: &Value, text: &str) -> (String, Value) {
+    let action = answers["action"]["choice"].as_str().unwrap_or("not_a_command");
+    let sure = answers["action"]["confidence"].as_f64().unwrap_or(0.0) >= MIN_CONFIDENCE;
+    let app = answers["app"]["choice"].as_str().unwrap_or("none");
+    let app_sure = app != "none" && answers["app"]["confidence"].as_f64().unwrap_or(0.0) >= APP_CONFIDENCE;
+    let (name, args) = match action {
+        _ if !sure && app_sure => ("open_app", json!({ "name": app })),
+        _ if !sure => ("not_a_command", json!({})),
+        "open_app" if app == "none" => ("not_a_command", json!({})),
+        "open_app" => ("open_app", json!({ "name": app })),
+        // La frase intera è la richiesta: il modello che scrive ignora il "creami…".
+        "create_document" | "create_website" => (action, json!({ "request": text })),
+        known if ACTIONS.iter().any(|(name, _)| *name == known) => (known, json!({})),
+        _ => ("not_a_command", json!({})),
+    };
+    (name.to_string(), args)
+}
+
+/// Riserva senza chiave Jev: Gemini Flash con strumento obbligatorio.
+async fn gemini_choose(text: &str) -> Result<Vec<(String, Value)>, String> {
     let apps = crate::apps::cached();
     let mut messages = vec![json!({
         "role": "system",
@@ -107,17 +217,7 @@ async fn choose(app: &AppHandle, text: &str) -> Result<Vec<String>, String> {
             .map(|detail| format!("OpenRouter: {detail}"))
             .unwrap_or_else(|| "Nessun comando riconosciuto.".into()));
     }
-    for (name, args) in &calls {
-        let _ = app.emit("app:tool", json!({ "name": name, "args": args }));
-    }
-    let names: Vec<String> = calls.into_iter().map(|(name, _)| name).collect();
-    if let Ok(mut history) = HISTORY.lock() {
-        history.push(json!({ "role": "user", "content": text }));
-        history.push(json!({ "role": "assistant", "content": format!("[{}]", names.join(", ")) }));
-        let excess = history.len().saturating_sub(MAX_TURNS * 2);
-        history.drain(..excess);
-    }
-    Ok(names)
+    Ok(calls)
 }
 
 /// Solo strumenti, niente testo: più rapido e nessuna chiacchiera possibile.
@@ -147,6 +247,63 @@ fn tool_calls(body: &Value) -> Vec<(String, Value)> {
             Some((name, args))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod jev_eval {
+    use std::time::Instant;
+
+    /// Jev sceglie azione e app giuste? Quanto ci mette? (chiave Jev dell'app)
+    /// cargo test jev_eval -- --ignored --nocapture
+    #[test]
+    #[ignore = "rete + chiave Jev"]
+    fn jev_eval() {
+        let cases = [
+            ("Fammi partire Spotify per favore", "open_app", "Spotify"),
+            ("Puoi farmi vedere il desktop?", "show_desktop", ""),
+            ("Scrivimi un documento sulla storia di Venezia", "create_document", ""),
+            ("Che circonferenza ha la Terra?", "not_a_command", ""),
+            ("Quanto fa diciassette per ventitré?", "not_a_command", ""),
+            ("Ok basta così, grazie", "end_conversation", ""),
+            ("Mi serve fare due conti, apri la calcolatrice", "open_app", "Calcolatrice"),
+            ("Chiudi questa finestra", "close_window", ""),
+            ("Preparami una landing page per il mio studio dentistico", "create_website", ""),
+            ("Metti su SmileSync", "open_app", "SmileSync"),
+            ("Vorrei lavorare sul gestionale dell'officina", "open_app", "PitStop Workshop Manager"),
+        ];
+        let key = crate::jev_key().expect("chiave Jev nel Credential Manager");
+        let apps = ["Spotify", "Calcolatrice", "Esplora file", "SmileSync", "PitStop Workshop Manager", "Google Chrome"];
+        let mut criteria = serde_json::Map::new();
+        for app in apps {
+            criteria.insert(app.into(), serde_json::Value::Null);
+        }
+        criteria.insert("none".into(), serde_json::json!("Nessuna app della lista."));
+        let actions: serde_json::Map<String, serde_json::Value> =
+            super::ACTIONS.iter().map(|(n, a)| (n.to_string(), serde_json::json!(a))).collect();
+        let questions = serde_json::json!({
+            "action": { "type": "choice", "instructions": "Frase detta a voce all'assistente di un PC Windows: che azione chiede?", "criteria": actions },
+            "app": { "type": "choice", "instructions": "Se la frase chiede di aprire un'app, quale di queste? Altrimenti none.", "criteria": criteria }
+        });
+        let (mut ok, mut times) = (0, Vec::new());
+        for (text, action, app) in cases {
+            let start = Instant::now();
+            let answers = tauri::async_runtime::block_on(crate::jev_ask(&key, text, questions.clone()));
+            times.push(start.elapsed().as_millis());
+            if let Err(error) = &answers { println!("JEV ERRORE {text}: {error} ({} ms)", times.last().unwrap()); }
+            let answers = answers.unwrap_or_default();
+            let (name, args) = super::pick(&answers, text);
+            let good = name == action && (app.is_empty() || args["name"] == app);
+            ok += usize::from(good);
+            println!(
+                "JEV {} {text} -> {name} {args} (azione {} {:.2}, app {} {:.2})",
+                if good { "ok" } else { "NO" },
+                answers["action"]["choice"], answers["action"]["confidence"].as_f64().unwrap_or(0.0),
+                answers["app"]["choice"], answers["app"]["confidence"].as_f64().unwrap_or(0.0)
+            );
+        }
+        times.sort();
+        println!("SCORE jev: {ok}/{} giusti, mediana {} ms, max {} ms", cases.len(), times[times.len() / 2], times[times.len() - 1]);
+    }
 }
 
 #[cfg(test)]
@@ -198,6 +355,34 @@ mod tool_eval {
             }
             times.sort();
             println!("SCORE {model}: {ok}/{} giusti, mediana {} ms, max {} ms", cases.len(), times[times.len() / 2], times[times.len() - 1]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod race_eval {
+    use std::time::Instant;
+
+    /// Percorso completo (Jev + riserva Gemini) con le app vere del PC.
+    /// cargo test race_eval -- --ignored --nocapture
+    #[test]
+    #[ignore = "rete + chiavi Jev e OpenRouter"]
+    fn race_eval() {
+        crate::apps::list_apps(); // carica l'elenco del menu Start
+        let key = crate::jev_key().expect("chiave Jev");
+        for text in [
+            "Fammi partire Spotify per favore",
+            "Mi serve fare due conti, apri la calcolatrice",
+            "Metti su SmileSync",
+            "Vorrei lavorare sul gestionale dell'officina",
+            "Apri il programma per i file",
+            "Che circonferenza ha la Terra?",
+            "Puoi farmi vedere il desktop?",
+            "Ok basta così, grazie",
+        ] {
+            let start = Instant::now();
+            let calls = tauri::async_runtime::block_on(super::race(&key, text));
+            println!("RACE {:>5} ms  {text} -> {calls:?}", start.elapsed().as_millis());
         }
     }
 }

@@ -14,7 +14,6 @@ import {
   installPendingUpdate,
   interpret,
   openApp,
-  parseIntent,
   saveSettings,
   setListening,
   setWakeEnabled,
@@ -33,8 +32,8 @@ import type { AppState } from './types';
  *
  * «Hey Jev» apre una sessione: il backend Rust manda il microfono a Deepgram in
  * streaming (o taglia le frasi per Whisper locale) e la UI esegue i comandi appena
- * arrivano. Le frasi che il parser non riconosce le traduce Gemini in uno strumento:
- * Jev è laconico, esegue e basta; la voce Maia parla solo per errori e avvisi. La sessione finisce dopo qualche secondo di
+ * arrivano. Le frasi che il parser non riconosce le interpreta Jev (TypeSafe, ~0,4 s;
+ * Gemini di riserva) e HeyJev le esegue: laconico, la voce Maia parla solo per errori e avvisi. La sessione finisce dopo qualche secondo di
  * silenzio (Impostazioni) oppure con «grazie» / «ok» / «silenzio».
  * «Crea un documento/sito…» avvia una dettatura: tutto ciò che segue fino alla fine
  * della sessione è la richiesta, eseguita in background da OpenRouter.
@@ -170,7 +169,7 @@ export default function App() {
   /** Esegue in ordine i comandi di una frase. */
   const runCommands = useCallback(async (heard: string) => {
     const transcript = applyCorrections(heard, correctionsRef.current);
-    let actions = parseCommands(transcript);
+    const actions = parseCommands(transcript);
     const draft = draftRef.current;
     if (draft) {
       // Dettatura per l'AI: ogni frase si aggiunge alla richiesta, «grazie» la invia.
@@ -180,19 +179,13 @@ export default function App() {
       return;
     }
     if (!actions.length) {
-      // Il parser non la riconosce: Gemini sceglie lo strumento (app:tool → runTool).
-      // Senza chiave OpenRouter resta il classificatore Jev/TypeSafe.
+      // Il parser non la riconosce: Jev sceglie azione e app (app:tool → runTool).
       try {
         setStatus(transcript);
         await interpret(transcript);
         return;
       } catch {
-        try {
-          const intent = await parseIntent(transcript);
-          if (intent.action) actions = [intent.action];
-        } catch {
-          // Nessun servizio configurato o raggiungibile: frase non riconosciuta.
-        }
+        // Né Jev né Gemini configurati o raggiungibili: frase non riconosciuta.
       }
     }
     if (!actions.length) {

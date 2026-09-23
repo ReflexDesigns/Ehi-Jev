@@ -2,7 +2,7 @@
  * Command Parser offline (Regex / Intent matching).
  *
  * Primo livello: istantaneo e locale. Jev (TypeSafe) resta il ripiego per le frasi
- * libere che nessuna regola riconosce (src-tauri/src/lib.rs, parse_intent).
+ * libere che nessuna regola riconosce (src-tauri/src/chat.rs).
  * `\s*` e `p+`: Whisper tiny a volte fonde o raddoppia ("Apriterminale", "Appri").
  */
 

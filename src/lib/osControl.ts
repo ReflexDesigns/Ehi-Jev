@@ -5,12 +5,6 @@ import { invoke } from '@tauri-apps/api/core';
  * Ogni funzione corrisponde a un #[tauri::command] nel backend.
  */
 
-export interface IntentResult {
-  action: string | null;
-  confidence: number | null;
-  engine: 'jev';
-}
-
 export interface UpdateSummary {
   version: string;
   notes: string | null;
@@ -47,15 +41,6 @@ export function setListening(active: boolean): Promise<void> {
 /** Esegue un'azione di automazione Windows (es. open_terminal). */
 export function executeAction(action: string): Promise<string> {
   return invoke<string>('execute_action', { action });
-}
-
-/**
- * Classifica il transcript con il modello Jev (TypeSafe).
- * Se JEV_API_KEY non è configurata, il comando restituisce errore
- * e il frontend usa il parser regex offline (commandParser.ts).
- */
-export function parseIntent(transcript: string): Promise<IntentResult> {
-  return invoke<IntentResult>('parse_intent', { transcript });
 }
 
 /** Controlla l'ultima release pubblica firmata su GitHub. */
@@ -132,8 +117,8 @@ export function saveDeepgramKey(key: string): Promise<void> {
   return invoke<void>('set_deepgram_key', { key });
 }
 
-/** Frase che il parser non riconosce: Gemini sceglie solo lo strumento (evento app:tool),
- *  niente conversazione. Ritorna gli strumenti scelti. */
+/** Frase che il parser non riconosce: Jev (TypeSafe) sceglie azione e app, con Gemini di
+ *  riserva; il risultato arriva come evento app:tool. Ritorna gli strumenti scelti. */
 export function interpret(text: string): Promise<string[]> {
   return invoke<string[]>('interpret', { text });
 }
