@@ -2,10 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import Notch from './components/Notch';
 import SettingsPanel from './components/SettingsPanel';
+import KeysOnboarding from './components/KeysOnboarding';
 import VoiceTutorial from './components/VoiceTutorial';
 import { parseCommands } from './lib/commandParser';
 import {
   aiCreate,
+  aiKeyConfigured,
+  deepgramKeyConfigured,
   checkForUpdate,
   endSession,
   executeAction,
@@ -13,6 +16,7 @@ import {
   hideWindow,
   installPendingUpdate,
   interpret,
+  jevKeyConfigured,
   openApp,
   saveSettings,
   setListening,
@@ -44,6 +48,13 @@ import type { AppState } from './types';
 const WAKE_RETRY_MS = 5000; // riavvio del rilevatore dopo un errore microfono
 const LAST_RESULT_MS = 700; // l'ultimo esito resta visibile prima di chiudere
 const NOTICE_MS = 4000; // avviso a fine lavoro AI
+
+type Panel = 'settings' | 'keys' | 'tutorial';
+const PANEL_TITLES: Record<Panel, string> = {
+  settings: 'Impostazioni',
+  keys: 'Chiavi API',
+  tutorial: 'Tutorial voce',
+};
 /** Strumenti di Jev che corrispondono ad azioni già esistenti. */
 const TOOL_ACTIONS: Record<string, string> = {
   open_terminal: 'open_terminal',
@@ -56,8 +67,7 @@ const TOOL_ACTIONS: Record<string, string> = {
 export default function App() {
   const [state, setState] = useState<AppState>('setup');
   const [status, setStatus] = useState('Avvio del motore vocale…');
-  const [showSettings, setShowSettings] = useState(false);
-  const [showTutorial, setShowTutorial] = useState(false);
+  const [panel, setPanel] = useState<Panel | null>(null); // pannello aperto nell'isola
   const [updateAvailable, setUpdateAvailable] = useState<UpdateSummary | null>(null);
   const [speaking, setSpeaking] = useState(false); // Jev sta parlando: onda "calda"
 
@@ -86,8 +96,7 @@ export default function App() {
   /** Chiusura: la pillola si restringe e risale, poi click-through. */
   const close = useCallback(async () => {
     holdRef.current = false;
-    setShowSettings(false);
-    setShowTutorial(false);
+    setPanel(null);
     setUpdateAvailable(null);
     applyState('closing');
     setStatus('');
@@ -278,8 +287,7 @@ export default function App() {
       void hideWindow().catch(() => undefined);
       const settings = await getSettings().catch(() => null);
       loadCorrections(settings);
-      // Primo avvio: prima di tutto il tutorial voce.
-      if (settings && !settings.voiceTrained) void openTutorialRef.current();
+      if (settings) void firstRunRef.current(settings);
     } catch (error) {
       wakeReadyRef.current = false;
       applyState('setup');
@@ -291,7 +299,9 @@ export default function App() {
 
   const getLevel = useCallback(() => levelRef.current, []);
 
-  const openSettings = useCallback(async () => {
+  /** Pannello nell'isola: ferma la wake word e tiene aperto finché l'utente non chiude.
+   *  Il tutorial usa lo stato "listening" per l'onda che segue il microfono. */
+  const openPanel = useCallback(async (next: Panel) => {
     if (sessionRef.current) return;
     try {
       holdRef.current = true;
@@ -299,37 +309,46 @@ export default function App() {
       await showWindow();
       await setListening(true);
       setUpdateAvailable(null);
-      setShowTutorial(false);
-      setShowSettings(true);
-      applyState('setup');
-      setStatus('Impostazioni');
+      setPanel(next);
+      applyState(next === 'tutorial' ? 'listening' : 'setup');
+      setStatus(PANEL_TITLES[next]);
     } catch (error) {
-      setStatus(`Impossibile aprire le impostazioni: ${String(error)}`);
+      setStatus(`Impossibile aprire ${PANEL_TITLES[next]}: ${String(error)}`);
     }
   }, [applyState]);
 
-  /** Tutorial voce nell'isola; stato "listening" per l'onda che segue il microfono. */
-  const openTutorial = useCallback(async () => {
-    if (sessionRef.current) return;
-    try {
-      holdRef.current = true;
-      await setWakeEnabled(false);
-      await showWindow();
-      await setListening(true);
-      setUpdateAvailable(null);
-      setShowSettings(false);
-      setShowTutorial(true);
-      applyState('listening');
-      setStatus('Tutorial voce');
-    } catch (error) {
-      setStatus(`Impossibile aprire il tutorial: ${String(error)}`);
+  /** Primo avvio: chiavi API (se ne manca qualcuna), poi tutorial voce. */
+  const firstRun = useCallback(async (settings: Settings) => {
+    if (!settings.keysOnboarded) {
+      const keys = await Promise.all([deepgramKeyConfigured(), jevKeyConfigured(), aiKeyConfigured()]).catch(() => []);
+      if (keys.length && keys.every(Boolean)) await saveSettings({ ...settings, keysOnboarded: true }).catch(() => undefined);
+      else return openPanel('keys');
     }
-  }, [applyState]);
-  const openTutorialRef = useRef(openTutorial);
-  openTutorialRef.current = openTutorial;
+    if (!settings.voiceTrained) await openPanel('tutorial');
+  }, [openPanel]);
+  const firstRunRef = useRef(firstRun);
+  firstRunRef.current = firstRun;
+
+  /** Chiavi fatte (o saltate): non si ripropongono; al primo avvio segue il tutorial voce. */
+  const finishKeys = useCallback(async (summary: string) => {
+    const settings = await getSettings().catch(() => null);
+    if (settings && !settings.keysOnboarded) await saveSettings({ ...settings, keysOnboarded: true }).catch(() => undefined);
+    if (settings && !settings.voiceTrained) {
+      setStatus(summary);
+      await openPanel('tutorial');
+      return;
+    }
+    setPanel(null);
+    holdRef.current = false;
+    applyState('done');
+    setStatus(summary);
+    window.setTimeout(() => {
+      if (stateRef.current === 'done') void close();
+    }, NOTICE_MS);
+  }, [applyState, close, openPanel]);
 
   const finishTutorial = useCallback(async (summary: string) => {
-    setShowTutorial(false);
+    setPanel(null);
     loadCorrections(await getSettings().catch(() => null));
     holdRef.current = false;
     applyState('done');
@@ -347,7 +366,7 @@ export default function App() {
   }, [close]);
 
   const checkUpdatesFromSettings = useCallback(async () => {
-    setShowSettings(false);
+    setPanel(null);
     applyState('processing');
     const result = await checkUpdates();
     setStatus(result);
@@ -409,7 +428,7 @@ export default function App() {
         // Microfono cambiato/ricollegato: il nuovo avvio usa il device predefinito attuale.
         window.setTimeout(() => void activateWakeWord(), WAKE_RETRY_MS);
       }),
-      listen('app:open-settings', () => void openSettings()),
+      listen('app:open-settings', () => void openPanel('settings')),
     ]).then((listeners) => {
       if (disposed) listeners.forEach((unlisten) => unlisten());
       else unlisteners = listeners;
@@ -420,7 +439,7 @@ export default function App() {
       unlisteners.forEach((unlisten) => unlisten());
       void setWakeEnabled(false);
     };
-  }, [activateWakeWord, applyState, finishSession, handleTranscript, onWakeWord, openSettings, runTool]);
+  }, [activateWakeWord, applyState, finishSession, handleTranscript, onWakeWord, openPanel, runTool]);
 
   return (
     <Notch
@@ -433,17 +452,19 @@ export default function App() {
       onInstallUpdate={() => void installUpdate()}
       onDismissUpdate={() => void close()}
     >
-      {showSettings ? (
+      {panel === 'settings' ? (
         <SettingsPanel
           onClose={() => {
             void getSettings().then(loadCorrections, () => undefined); // "chi ascolta" può essere cambiato
             void close();
           }}
           onCheckUpdate={() => void checkUpdatesFromSettings()}
-          onTutorial={() => void openTutorial()}
+          onTutorial={() => void openPanel('tutorial')}
+          onKeys={() => void openPanel('keys')}
         />
       ) : null}
-      {showTutorial ? (
+      {panel === 'keys' ? <KeysOnboarding onDone={(summary) => void finishKeys(summary)} /> : null}
+      {panel === 'tutorial' ? (
         <VoiceTutorial onDone={(summary) => void finishTutorial(summary)} onSkip={() => void skipTutorial()} />
       ) : null}
     </Notch>

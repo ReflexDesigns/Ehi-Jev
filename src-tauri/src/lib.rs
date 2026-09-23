@@ -84,6 +84,8 @@ pub(crate) struct Settings {
     pub(crate) recognition: String,
     /// Tutorial voce fatto: al primo avvio parte da solo.
     voice_trained: bool,
+    /// Onboarding delle chiavi API fatto (o saltato): al primo avvio parte prima del tutorial.
+    keys_onboarded: bool,
     /// Come Whisper sente la tua «Hey Jev» (dal tutorial). Vuoto = basta il KWS.
     pub(crate) wake_aliases: Vec<String>,
     /// Correzioni imparate nel tutorial: [sentito, voluto].
@@ -99,6 +101,7 @@ impl Default for Settings {
             notifications: true,
             recognition: "deepgram".into(),
             voice_trained: false,
+            keys_onboarded: false,
             wake_aliases: Vec::new(),
             corrections: Vec::new(),
         }
@@ -545,6 +548,22 @@ fn already_running() -> bool {
     }
 }
 
+/// Pagine dove si creano le chiavi (onboarding). Solo questi indirizzi esatti: la UI non
+/// può far aprire URL arbitrari.
+const KEY_PAGES: [&str; 3] = [
+    "https://console.deepgram.com/signup",
+    "https://console.typesafe.ai",
+    "https://openrouter.ai/keys",
+];
+
+#[tauri::command]
+fn open_link(url: String) -> Result<(), String> {
+    if !KEY_PAGES.contains(&url.as_str()) {
+        return Err("Indirizzo non consentito.".into());
+    }
+    open_url(&url)
+}
+
 fn open_url(url: &str) -> Result<(), String> {
     let operation: Vec<u16> = "open\0".encode_utf16().collect();
     let target: Vec<u16> = url.encode_utf16().chain(Some(0)).collect();
@@ -690,6 +709,7 @@ pub fn run() {
             execute_action,
             jev_key_configured,
             set_jev_key,
+            open_link,
             check_for_update,
             install_pending_update,
             ai::ai_create,

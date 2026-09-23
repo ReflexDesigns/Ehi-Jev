@@ -15,12 +15,13 @@ interface SettingsPanelProps {
   onClose: () => void;
   onCheckUpdate: () => void;
   onTutorial: () => void;
+  onKeys: () => void;
 }
 
 const SENSITIVITY = ['Bassa', 'Medio-bassa', 'Media', 'Alta', 'Molto alta'];
 
 /** Impostazioni (icona nella tray: clic, oppure tasto destro → Impostazioni…). */
-export default function SettingsPanel({ onClose, onCheckUpdate, onTutorial }: SettingsPanelProps) {
+export default function SettingsPanel({ onClose, onCheckUpdate, onTutorial, onKeys }: SettingsPanelProps) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [aiKey, setAiKey] = useState('');
   const [jevKey, setJevKey] = useState('');
@@ -152,6 +153,9 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onTutorial }: Se
       <div className="panel-actions">
         <button type="button" className="pill-button secondary" onClick={onCheckUpdate}>
           Aggiornamenti
+        </button>
+        <button type="button" className="pill-button secondary" onClick={onKeys}>
+          Chiavi
         </button>
         <button type="button" className="pill-button secondary" onClick={onTutorial}>
           Tutorial voce

@@ -71,6 +71,8 @@ export interface Settings {
   recognition: 'deepgram' | 'local';
   /** Tutorial voce fatto (al primo avvio parte da solo). */
   voiceTrained: boolean;
+  /** Onboarding delle chiavi fatto o saltato (al primo avvio parte prima del tutorial). */
+  keysOnboarded: boolean;
   /** Come Whisper sente la «Hey Jev» dell'utente: riconoscimento di riserva. */
   wakeAliases: string[];
   /** Correzioni imparate nel tutorial: [sentito, voluto]. */
@@ -97,6 +99,11 @@ export function aiKeyConfigured(): Promise<boolean> {
 /** Verifica la chiave OpenRouter e la salva nel Credential Manager. */
 export function saveAiKey(key: string): Promise<void> {
   return invoke<void>('set_ai_key', { key });
+}
+
+/** Apre la pagina dove si crea una chiave (solo quelle ammesse dal backend). */
+export function openLink(url: string): Promise<void> {
+  return invoke<void>('open_link', { url });
 }
 
 export function jevKeyConfigured(): Promise<boolean> {

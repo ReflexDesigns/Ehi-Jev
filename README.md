@@ -34,8 +34,8 @@ Dici «Hey Jev»: un’isola nera stile Dynamic Island cola giù dall’alto, ti
 
 1. Scarica `HeyJev_<versione>_x64-setup.exe` dall’**[ultima release](https://github.com/ReflexDesigns/Ehi-Jev/releases/latest)**.
 2. Avvialo: si installa per il tuo utente, senza permessi di amministratore. Windows SmartScreen può avvisare che l’editore è sconosciuto (l’installer non ha una firma Authenticode): **Ulteriori informazioni → Esegui comunque**.
-3. Al primo avvio parte il **tutorial voce**.
-4. Clic sull’icona di HeyJev nella system tray → **Impostazioni**: incolla le chiavi **Deepgram** (ascolto e voce), **Jev** (esegue i comandi detti a modo tuo) e **OpenRouter** (documenti e siti). Senza chiavi HeyJev funziona lo stesso, offline, con i comandi diretti.
+3. Al primo avvio una **procedura guidata** ti fa creare e incollare le chiavi, una alla volta, con il link alla pagina giusta: **Deepgram** (ascolto e voce, credito gratuito all’iscrizione), **Jev** (esegue i comandi detti a modo tuo) e **OpenRouter** (documenti e siti). Ogni chiave viene verificata prima di essere salvata; puoi saltarle e rifarlo da **Impostazioni → Chiavi**. Senza chiavi HeyJev funziona lo stesso, offline, con i comandi diretti.
+4. Poi parte il **tutorial voce**.
 
 Requisiti: Windows 10/11 x64, microfono, WebView2 (già presente su Windows 11).
 
@@ -78,7 +78,7 @@ Clic sull’icona nella system tray (o tasto destro → **Impostazioni…**):
 - **Chiave Deepgram** ([console.deepgram.com](https://console.deepgram.com)): ascolto in streaming (nova-3, italiano) e voce Aura 2 Maia;
 - **Chiave Jev** ([typesafe.ai](https://docs.typesafe.ai/api)): Jev, il modello System One di TypeSafe, sceglie in circa 0,4 s il comando e l’app per le frasi dette a modo tuo;
 - **Chiave OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/keys)): documenti (Gemini Flash) e siti (DeepSeek Flash); Gemini 3.5 Flash-Lite fa anche da riserva se Jev non risponde. Si paga a consumo su OpenRouter;
-- tutorial voce e controllo aggiornamenti.
+- **Chiavi** (procedura guidata), tutorial voce e controllo aggiornamenti.
 
 Le chiavi vengono verificate prima del salvataggio.
 

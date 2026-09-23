@@ -257,6 +257,10 @@ body,
   accent-color: var(--accent);
 }
 
+.notch-panel .key-ok {
+  color: #30d158;
+}
+
 /* Tutorial voce: la frase da leggere, grande. */
 .tutorial-phrase {
   margin: 4px 0 10px;
