@@ -28,10 +28,10 @@ if (-not (Test-Path $tokens) -or -not (Test-Path $bpeModel)) {
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) { throw 'Installa Python 3 e ripeti questo script per generare i token di «HEY JEV».' }
 
-& $python.Source -m pip show sherpa-onnx *> $null
+& $python.Source -c "import importlib.util, sys; sys.exit(0 if all(importlib.util.find_spec(name) for name in ('sherpa_onnx', 'click', 'sentencepiece', 'pypinyin')) else 1)"
 if ($LASTEXITCODE -ne 0) {
     Write-Host 'Installo il solo strumento di setup per tokenizzare «HEY JEV»...'
-    & $python.Source -m pip install --user sherpa-onnx
+    & $python.Source -m pip install --user sherpa-onnx click sentencepiece pypinyin
     if ($LASTEXITCODE -ne 0) { throw 'Installazione del generatore token sherpa-onnx fallita.' }
 }
 

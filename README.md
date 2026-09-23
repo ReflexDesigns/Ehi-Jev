@@ -45,7 +45,7 @@ L’icona sorgente è `public/app-icon.svg`. `npm run icons` genera le icone Tau
 ## Configurazione locale
 
 1. Crea `.env.local` copiando `.env.example` e inserisci la tua chiave API Jev/TypeSafe. `.env.local` è escluso da Git: **non committare né condividere le chiavi**.
-2. Prepara il rilevatore KWS da PowerShell:
+2. Il primo avvio di `npm run tauri:dev` o `npm run tauri:build` prepara automaticamente il rilevatore KWS: scarica il modello inglese e genera `keywords.txt`. Per eseguirlo manualmente:
 
    ```powershell
    .\scripts\setup-kws.ps1
@@ -67,7 +67,7 @@ Per creare l’installer NSIS `.exe` (configurato in `src-tauri/tauri.conf.json`
 npm run tauri:build
 ```
 
-Il file si trova in `src-tauri/target/release/bundle/nsis/`. La build richiede toolchain Rust/MSVC e WebView2. I modelli Whisper e KWS sono esclusi da Git e non vengono distribuiti nel repository; seguire i passaggi sopra per predisporli sulla macchina.
+Il file si trova in `src-tauri/target/release/bundle/nsis/`. La build richiede toolchain Rust/MSVC, Python 3, connessione Internet al primo setup e WebView2. Il KWS viene incluso nell'installer, quindi non serve Python sulla macchina di chi lo installa. I modelli restano esclusi da Git. Whisper.cpp e il modello Whisper richiedono ancora una configurazione separata.
 
 ## Aggiornamenti
 
