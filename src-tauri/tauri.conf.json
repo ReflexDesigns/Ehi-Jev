@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "HeyJev",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "identifier": "com.heyjev.app",
   "build": {
-    "beforeDevCommand": "npm run setup:kws && npm run icons && npm run dev",
+    "beforeDevCommand": "npm run setup:models && npm run icons && npm run dev",
     "devUrl": "http://127.0.0.1:3000",
-    "beforeBuildCommand": "npm run setup:kws && npm run icons && npm run build",
+    "beforeBuildCommand": "npm run setup:models && npm run icons && npm run build",
     "frontendDist": "../dist"
   },
   "app": {

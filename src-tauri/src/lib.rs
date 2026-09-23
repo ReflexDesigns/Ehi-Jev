@@ -93,7 +93,7 @@ fn set_clickthrough(app: &AppHandle, ignore: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn transcribe_audio(audio: Vec<u8>) -> Result<String, String> {
+async fn transcribe_audio(app: AppHandle, audio: Vec<u8>) -> Result<String, String> {
     if audio.len() < 44
         || audio.len() > 12 * 1024 * 1024
         || &audio[0..4] != b"RIFF"
@@ -101,24 +101,26 @@ async fn transcribe_audio(audio: Vec<u8>) -> Result<String, String> {
     {
         return Err("Audio WAV non valido o troppo grande.".into());
     }
-    tauri::async_runtime::spawn_blocking(move || transcribe_with_whisper(audio))
+    tauri::async_runtime::spawn_blocking(move || transcribe_with_whisper(audio, app))
         .await
         .map_err(|error| format!("Worker Whisper non disponibile: {error}"))?
 }
 
-fn transcribe_with_whisper(audio: Vec<u8>) -> Result<String, String> {
-    let configured_model =
-        env::var("WHISPER_MODEL_PATH").unwrap_or_else(|_| "./models/whisper-tiny.bin".into());
-    let path = PathBuf::from(configured_model);
-    let model = if path.is_absolute() {
-        path
-    } else {
-        env::current_dir().unwrap_or_default().join(path)
-    };
-    if !model.is_file() {
-        return Err(format!("Modello Whisper non trovato: {}", model.display()));
-    }
-    let binary = env::var("WHISPER_CPP_BIN").unwrap_or_else(|_| "whisper-cli.exe".into());
+fn transcribe_with_whisper(audio: Vec<u8>, app: AppHandle) -> Result<String, String> {
+    let model = resolve_whisper_file(&app, "WHISPER_MODEL_PATH", "models/whisper/ggml-tiny.bin")?;
+    let bundled_binary = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("Cartella risorse HeyJev non accessibile: {error}"))?
+        .join("models/whisper/bin/whisper-cli.exe");
+    let configured_binary = env::var("WHISPER_CPP_BIN").ok().map(PathBuf::from);
+    let binary = configured_binary
+        .as_ref()
+        .filter(|path| path.is_file())
+        .cloned()
+        .or_else(|| bundled_binary.is_file().then_some(bundled_binary))
+        .or(configured_binary)
+        .unwrap_or_else(|| PathBuf::from("whisper-cli.exe"));
     let language = env::var("WHISPER_LANGUAGE").unwrap_or_else(|_| "auto".into());
     let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
     let input = temporary.path().join("command.wav");
@@ -134,7 +136,7 @@ fn transcribe_with_whisper(audio: Vec<u8>) -> Result<String, String> {
         .arg(&output)
         .output()
         .map_err(|error| {
-            format!("Avvio Whisper.cpp fallito: {error}. Controlla WHISPER_CPP_BIN.")
+            format!("Avvio Whisper.cpp fallito: {error}. Verifica i file inclusi nell'installer o WHISPER_CPP_BIN.")
         })?;
     if !result.status.success() {
         return Err(format!(
@@ -145,6 +147,41 @@ fn transcribe_with_whisper(audio: Vec<u8>) -> Result<String, String> {
     fs::read_to_string(output.with_extension("txt"))
         .map(|text| text.trim().to_string())
         .map_err(|error| format!("Whisper non ha prodotto la trascrizione: {error}"))
+}
+
+fn resolve_whisper_file(
+    app: &AppHandle,
+    env_name: &str,
+    bundled_relative_path: &str,
+) -> Result<PathBuf, String> {
+    let current_dir = env::current_dir().unwrap_or_default();
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("Cartella risorse HeyJev non accessibile: {error}"))?;
+
+    if let Ok(configured) = env::var(env_name) {
+        let path = PathBuf::from(configured);
+        let candidates = if path.is_absolute() {
+            vec![path]
+        } else {
+            vec![current_dir.join(&path), resource_dir.join(path)]
+        };
+        if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
+            return Ok(path);
+        }
+    }
+
+    let bundled = PathBuf::from(bundled_relative_path);
+    let candidates = [current_dir.join(&bundled), resource_dir.join(bundled)];
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            format!(
+                "Modello Whisper non trovato. Il modello incluso dovrebbe trovarsi in models/whisper/ggml-tiny.bin; esegui npm run setup:whisper."
+            )
+        })
 }
 
 #[tauri::command]

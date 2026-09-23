@@ -39,19 +39,20 @@ L’icona sorgente è `public/app-icon.svg`. `npm run icons` genera le icone Tau
 - Windows 10/11 x64 e WebView2 Runtime.
 - Node.js 18+ e npm.
 - Rust stable con toolchain MSVC, Visual Studio C++ Build Tools e Windows SDK.
-- Python 3 per lo script di preparazione del modello KWS.
-- whisper.cpp con `whisper-cli.exe` e un modello GGML compatibile (per esempio `ggml-tiny.bin`).
+- Python 3 per preparare i token del modello KWS durante sviluppo/build.
+- Connessione Internet al primo avvio in sviluppo/build per scaricare i modelli KWS e Whisper e il runtime whisper.cpp ufficiale.
 
 ## Configurazione locale
 
 1. Crea `.env.local` copiando `.env.example` e inserisci la tua chiave API Jev/TypeSafe. `.env.local` è escluso da Git: **non committare né condividere le chiavi**.
-2. Il primo avvio di `npm run tauri:dev` o `npm run tauri:build` prepara automaticamente il rilevatore KWS: scarica il modello inglese e genera `keywords.txt`. Per eseguirlo manualmente:
+2. Il primo avvio di `npm run tauri:dev` o `npm run tauri:build` prepara automaticamente KWS e Whisper: scarica il modello inglese KWS e genera `keywords.txt`, poi scarica `whisper-cli.exe` e il modello Whisper tiny multilingue. Dopo installazione/setup, la trascrizione resta locale e funziona offline. Per eseguire manualmente i setup:
 
    ```powershell
    .\scripts\setup-kws.ps1
+   .\scripts\setup-whisper.ps1
    ```
 
-3. Scarica un modello whisper.cpp e impostane il percorso in `.env.local`. Installa `whisper-cli.exe` e configura `WHISPER_CPP_BIN` se non è nel `PATH`.
+3. I percorsi predefiniti di Whisper sono già impostati nel template `.env.example`; `WHISPER_MODEL_PATH`, `WHISPER_CPP_BIN` e `WHISPER_LANGUAGE` servono solo se vuoi sovrascrivere il bundle.
 4. Verifica l’accesso al microfono nelle impostazioni di Windows. Al primo avvio premi **Attiva** per avviare il rilevatore.
 
 ## Avvio e installer
@@ -67,7 +68,7 @@ Per creare l’installer NSIS `.exe` (configurato in `src-tauri/tauri.conf.json`
 npm run tauri:build
 ```
 
-Il file si trova in `src-tauri/target/release/bundle/nsis/`. La build richiede toolchain Rust/MSVC, Python 3, connessione Internet al primo setup e WebView2. Il KWS viene incluso nell'installer, quindi non serve Python sulla macchina di chi lo installa. I modelli restano esclusi da Git. Whisper.cpp e il modello Whisper richiedono ancora una configurazione separata.
+Il file si trova in `src-tauri/target/release/bundle/nsis/`. La build richiede toolchain Rust/MSVC, Python 3, connessione Internet al primo setup e WebView2. L'installer include il modello KWS, il runtime whisper.cpp Windows x64 e il modello Whisper multilingue tiny (circa 75 MiB): è più grande, ma chi lo installa non deve scaricare/configurare modelli e può trascrivere offline. I modelli restano esclusi da Git.
 
 ## Aggiornamenti
 
@@ -75,7 +76,7 @@ Il file si trova in `src-tauri/target/release/bundle/nsis/`. La build richiede t
 
 Quando trova una versione nuova, The Notch mostra **Installa <versione>**. L’installazione richiede quel clic esplicito e Windows chiude l’app mentre applica il pacchetto firmato. La verifica della firma Tauri è obbligatoria.
 
-La GitHub Action `.github/workflows/release.yml` compila e pubblica installer, firme e `latest.json` a ogni tag Git `v*`. Prima di spingere un tag, aggiorna i file versione con `node scripts/set-version.mjs 0.2.1`, committa la modifica, quindi crea e spingi il tag corrispondente (`v0.2.1`). In GitHub Actions deve essere configurato il secret `TAURI_SIGNING_PRIVATE_KEY`; la chiave privata locale è esclusa da Git. **Il primo installer updater-enabled va installato manualmente**: un installer creato prima dell’integrazione dell’updater non può auto-aggiornarsi.
+La GitHub Action `.github/workflows/release.yml` compila e pubblica installer, firme e `latest.json` a ogni tag Git `v*`. Prima di spingere una nuova release, aggiorna i file versione con `node scripts/set-version.mjs X.Y.Z`, committa la modifica, quindi crea e spingi il tag corrispondente (`vX.Y.Z`). In GitHub Actions deve essere configurato il secret `TAURI_SIGNING_PRIVATE_KEY`; la chiave privata locale è esclusa da Git. **Il primo installer updater-enabled va installato manualmente**: un installer creato prima dell’integrazione dell’updater non può auto-aggiornarsi.
 
 ## Struttura principale
 
@@ -84,6 +85,7 @@ src/                         UI React, overlay, wave, parser e registrazione mic
 src-tauri/src/               backend Rust, wake listener, STT, intent e OS control
 src-tauri/tauri.conf.json    finestra, CSP, bundle NSIS e icone
 scripts/setup-kws.ps1        setup del modello KWS sherpa-onnx
+scripts/setup-whisper.ps1    setup whisper.cpp e modello STT multilingue
 scripts/set-version.mjs      sincronizza le versioni per una release taggata
 .github/workflows/release.yml build/publish automatico delle release firmate
 public/app-icon.svg          sorgente SVG icona

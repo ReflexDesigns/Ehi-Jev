@@ -9,6 +9,7 @@ target/
 *.key.pub
 models/*.bin
 models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/
+models/whisper/
 public/models/*.pv
 public/models/*.ppn
 *.log

@@ -1,6 +1,6 @@
 [package]
 name = "heyjev"
-version = "0.2.2"
+version = "0.2.3"
 description = "HeyJev - Direttore Operativo Vocale del PC (The Notch)"
 authors = ["HeyJev"]
 edition = "2021"
