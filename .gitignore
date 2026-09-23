@@ -13,3 +13,4 @@ public/models/*.pv
 public/models/*.ppn
 *.log
 .DS_Store
+/release/

@@ -96,3 +96,5 @@ models/                      modelli locali (esclusi da Git)
 npm run build
 cargo check --manifest-path src-tauri\Cargo.toml
 ```
+
+Per il primo pacchetto locale, installer e firma updater vengono copiati in `release/` (cartella esclusa da Git).

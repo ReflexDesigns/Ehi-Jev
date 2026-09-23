@@ -21,6 +21,14 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install frontend dependencies
+        run: npm ci
+
       - name: Set release version from tag
         shell: pwsh
         run: |
