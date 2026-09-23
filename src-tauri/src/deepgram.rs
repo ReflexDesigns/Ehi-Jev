@@ -24,7 +24,7 @@ const KEY_ACCOUNT: &str = "deepgram-api-key";
 const LISTEN_URL: &str = "wss://api.deepgram.com/v1/listen";
 const SPEAK_URL: &str = "wss://api.deepgram.com/v1/speak";
 const STT_RATE: u32 = 16_000;
-/// Nomi delle app passati a nova-3 come parole chiave ("SmileSync", "PitStop"…).
+/// Parole chiave passate a nova-3: frasi insegnate e nomi delle app ("SmileSync", "PitStop"…).
 const MAX_KEYTERMS: usize = 60;
 
 pub(crate) fn key() -> Option<String> {
@@ -76,13 +76,13 @@ pub(crate) struct Listener {
 }
 
 impl Listener {
-    pub(crate) fn start(app: &AppHandle, key: String, apps: Vec<String>) -> Self {
+    pub(crate) fn start(app: &AppHandle, key: String, terms: Vec<String>) -> Self {
         let (audio, receiver) = unbounded_channel();
         let failed = Arc::new(AtomicBool::new(false));
         let pending = Arc::new(AtomicBool::new(false));
         let (app, failed_task, pending_task) = (app.clone(), Arc::clone(&failed), Arc::clone(&pending));
         tauri::async_runtime::spawn(async move {
-            if let Err(error) = listen(&app, &key, &apps, receiver, &pending_task).await {
+            if let Err(error) = listen(&app, &key, &terms, receiver, &pending_task).await {
                 failed_task.store(true, Ordering::Release);
                 pending_task.store(false, Ordering::Release);
                 let _ = app.emit("app:transcript-error", format!("Deepgram: {error} Uso Whisper."));
@@ -114,20 +114,51 @@ impl Listener {
     }
 }
 
-fn keyterms(apps: &[String]) -> Vec<String> {
+/// Parole chiave per nova-3: prima le frasi insegnate in Parole imparate, poi i nomi delle app.
+pub(crate) fn keyterms(phrases: &[String], apps: &[String]) -> Vec<String> {
     let mut names: Vec<&String> = apps
         .iter()
         .filter(|name| !name.to_lowercase().contains("microsoft") && name.len() <= 30)
         .collect();
     names.sort_by_key(|name| name.len());
     names.dedup();
-    names.into_iter().take(MAX_KEYTERMS).cloned().collect()
+    phrases.iter().chain(names).take(MAX_KEYTERMS).cloned().collect()
+}
+
+/// Parole imparate: cosa sente Deepgram di una frase registrata, con le stesse parole
+/// chiave dell'ascolto in streaming (la prova non la fa Whisper, che qui non ascolta).
+pub(crate) async fn transcribe(key: &str, wav: Vec<u8>, terms: &[String]) -> Result<String, String> {
+    let mut params = vec![
+        ("model", "nova-3".to_string()),
+        ("language", "it".into()),
+        ("punctuate", "true".into()),
+    ];
+    params.extend(terms.iter().map(|term| ("keyterm", term.clone())));
+    let url = Url::parse_with_params("https://api.deepgram.com/v1/listen", &params)
+        .map_err(|error| error.to_string())?;
+    let response = reqwest::Client::new()
+        .post(url.as_str())
+        .header("Authorization", format!("Token {key}"))
+        .header("Content-Type", "audio/wav")
+        .body(wav)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|_| "Deepgram non raggiungibile: controlla la connessione.".to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("Deepgram ha restituito HTTP {}.", response.status()));
+    }
+    let body: Value = response.json().await.map_err(|error| error.to_string())?;
+    Ok(body["results"]["channels"][0]["alternatives"][0]["transcript"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string())
 }
 
 async fn listen(
     app: &AppHandle,
     key: &str,
-    apps: &[String],
+    terms: &[String],
     mut audio: UnboundedReceiver<Vec<u8>>,
     pending: &AtomicBool,
 ) -> Result<(), String> {
@@ -146,7 +177,7 @@ async fn listen(
         ("utterance_end_ms", "1000".into()),
         ("vad_events", "true".into()),
     ];
-    params.extend(keyterms(apps).into_iter().map(|term| ("keyterm", term)));
+    params.extend(terms.iter().map(|term| ("keyterm", term.clone())));
     let url = Url::parse_with_params(LISTEN_URL, &params).map_err(|error| error.to_string())?;
     let (socket, _) = connect_async(request(url, key)?)
         .await
@@ -355,5 +386,16 @@ mod tests {
         assert_eq!(take_sentence(&mut buffer, true).as_deref(), Some("Poi dimmi tu"));
         let mut numbers = "Costa 3.50 euro. Ok".to_string(); // il punto dei decimali non taglia
         assert_eq!(take_sentence(&mut numbers, false).as_deref(), Some("Costa 3.50 euro."));
+    }
+
+    /// HEYJEV_WAV=frase.wav cargo test deepgram_file -- --ignored --nocapture
+    #[test]
+    #[ignore = "rete + chiave Deepgram"]
+    fn deepgram_file() {
+        let wav = std::fs::read(std::env::var("HEYJEV_WAV").expect("HEYJEV_WAV")).expect("wav");
+        let key = super::key().expect("chiave Deepgram");
+        let run = |terms: &[String]| tauri::async_runtime::block_on(super::transcribe(&key, wav.clone(), terms));
+        println!("senza parole chiave: {:?}", run(&[]));
+        println!("con «Esplora file»: {:?}", run(&["Esplora file".into()]));
     }
 }

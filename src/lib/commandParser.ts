@@ -57,6 +57,15 @@ const RULES: CommandRule[] = [
       /\b(?:controlla|cerca|verifica)\s*(?:gli\s*)?(?:aggiornament[oi]|updates?)\b/gi,
     ],
   },
+  // Solo frasi esplicite, mai scelte da Jev: spegnere per sbaglio costa caro (e c'è «annulla»).
+  {
+    action: 'shutdown',
+    patterns: [/\b(?:spegn(?:i|ere)|spengi|shut\s*down|turn\s*off)\s+(?:(?:il|lo|the|my|questo)\s+)?(?:computer|pc|portatile|laptop)\b/gi],
+  },
+  {
+    action: 'restart',
+    patterns: [/\b(?:riavvi(?:a|are)|restart|reboot)\s+(?:(?:il|lo|the|my|questo)\s+)?(?:computer|pc|portatile|laptop)\b/gi],
+  },
 ];
 
 /**

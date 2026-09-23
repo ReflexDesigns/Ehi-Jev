@@ -56,6 +56,7 @@ Dopo «Hey Jev» HeyJev resta in ascolto ed esegue ogni frase appena fai una pau
 | «Crea un documento su …» | «Scrivimi un file / una relazione / un articolo…» | Documento `.md` (o `.txt`) in **Download** |
 | «Crea un sito / un MVP / un’app …» | «Preparami una landing / un prototipo…» | Progetto in `C:\Users\<tu>\<nome-progetto>` |
 | «Controlla aggiornamenti» | «Check for updates» | Cerca una nuova versione; si installa solo dopo il tuo clic |
+| «Spegni il PC» / «Riavvia il PC» | «Spegni il computer», «Restart the computer» | Te lo dice e aspetta 15 secondi: «annulla» lo ferma. Un’app con lavoro non salvato blocca lo spegnimento |
 | «Grazie» / «Silenzio» | «Ok», «Basta», «Stop», «Thank you» | Chiude l’ascolto |
 | Qualsiasi altra frase | «Fammi vedere il desktop», «Metti su SmileSync» | Jev sceglie il comando giusto; se non è un comando (es. «che circonferenza ha la Terra?») non fa niente |
 
@@ -70,7 +71,7 @@ Ognuno dice «Hey Jev» a modo suo, e il rilevatore offline è addestrato sull�
 
 Con **Whisper** (offline, senza Deepgram) leggi anche i comandi più comuni (apri e chiudi Chrome, Word, Excel, Blocco note…) e **quelle che scrivi tu**, per esempio i nomi delle app che non capisce: se sente «Smile Sink» quando dici «SmileSync», da lì in poi corregge da solo. Passando da Deepgram a Whisper nelle Impostazioni, la registrazione completa parte da sola.
 
-In **Impostazioni → Parole imparate** vedi cosa ha imparato (e togli quello che non ti piace) e insegni una parola nuova al volo: la scrivi, premi Registra, la dici.
+In **Impostazioni → Parole imparate** vedi cosa ha imparato (come ti chiama, le tue parole, le correzioni) e togli con ✕ quello che non ti piace. Puoi aggiungere un’altra «Hey Jev» o insegnare una parola nuova al volo: la scrivi, premi Registra, la dici. La prova la fa chi ascolta davvero: con Deepgram la parola diventa una delle sue parole chiave, con Whisper una correzione.
 
 Tutto resta sul tuo PC, in `%APPDATA%\com.heyjev.app\settings.json`.
 
@@ -94,7 +95,7 @@ Le chiavi vengono verificate prima del salvataggio.
 |---|---|
 | App desktop | [Tauri 2](https://tauri.app): backend Rust, interfaccia React/TypeScript |
 | Wake word | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) keyword spotting, offline, in Rust + CPAL; riserva Whisper imparata nel tutorial |
-| Ascolto | [Deepgram](https://deepgram.com) nova-3 in streaming WebSocket (italiano, fine frase automatica, nomi delle app come parole chiave); senza chiave [whisper.cpp](https://github.com/ggml-org/whisper.cpp) locale |
+| Ascolto | [Deepgram](https://deepgram.com) nova-3 in streaming WebSocket (italiano, fine frase automatica, le tue parole e i nomi delle app come parole chiave); senza chiave [whisper.cpp](https://github.com/ggml-org/whisper.cpp) locale |
 | Voce | Deepgram Aura 2 `aura-2-maia-it` via WebSocket, solo per errori e avvisi; si zittisce se parli (l’eco delle casse è riconosciuta dal contenuto) |
 | Comandi | Parser locale istantaneo e tollerante (`src/lib/commandParser.ts`); frasi libere a **Jev** (TypeSafe System One): azione e app in una richiesta, ~0,4 s; se tarda oltre 1,2 s corre anche Gemini 3.5 Flash-Lite e vince il primo (`src-tauri/src/chat.rs`) |
 | Esecuzione | Codice Rust di HeyJev sul PC: app del menu Start, scorciatoie Windows, finestre |

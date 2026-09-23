@@ -43,6 +43,11 @@ export function executeAction(action: string): Promise<string> {
   return invoke<string>('execute_action', { action });
 }
 
+/** «Annulla»: ferma lo spegnimento/riavvio in attesa. true se ce n'era uno. */
+export function cancelPower(): Promise<boolean> {
+  return invoke<boolean>('cancel_power');
+}
+
 /** Controlla l'ultima release pubblica firmata su GitHub. */
 export function checkForUpdate(): Promise<UpdateSummary | null> {
   return invoke<UpdateSummary | null>('check_for_update');
@@ -77,7 +82,7 @@ export interface Settings {
   wakeAliases: string[];
   /** Correzioni imparate nel tutorial: [sentito, voluto]. */
   corrections: [string, string][];
-  /** Frasi scritte dall'utente da far imparare a Whisper (max 50). */
+  /** Frasi insegnate dall'utente (max 50): parole chiave di Deepgram e frasi del tutorial di Whisper. */
   customPhrases: string[];
 }
 
@@ -177,7 +182,8 @@ export interface VoiceSample {
   snr: number;
 }
 
-/** Tutorial: registra la prossima frase detta (wake = «Hey Jev», senza vocabolario comandi). */
+/** Tutorial: registra la prossima frase detta e la trascrive chi ascolta i comandi (Deepgram
+ *  o Whisper). wake = «Hey Jev», sempre con Whisper (è la riserva del rilevatore). */
 export function recordSample(wake: boolean): Promise<VoiceSample> {
   return invoke<VoiceSample>('record_sample', { wake });
 }

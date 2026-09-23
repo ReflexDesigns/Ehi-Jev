@@ -105,7 +105,8 @@ pub fn end_session(controller: State<'_, WakeController>) {
 }
 
 /// Tutorial: registra la prossima frase, dice se il KWS l'ha presa come «Hey Jev» e cosa
-/// sente Whisper. `wake`: frase di attivazione, trascritta come la trascrive la riserva.
+/// sente chi ascolta i comandi (Deepgram o Whisper). `wake`: frase di attivazione, sempre
+/// trascritta da Whisper come la trascrive la riserva.
 #[tauri::command]
 pub async fn record_sample(
     app: AppHandle,
@@ -134,6 +135,16 @@ pub async fn record_sample(
         }
         return Err("Non ho sentito niente: riprova.".into());
     };
+    let settings = crate::current_settings(&app);
+    if let Some(key) = (!wake && settings.recognition == "deepgram").then(crate::deepgram::key).flatten() {
+        let terms = crate::deepgram::keyterms(&settings.custom_phrases, &crate::apps::cached());
+        let text = crate::deepgram::transcribe(&key, crate::wav_bytes(&samples, rate), &terms).await?;
+        return Ok(Sample {
+            text,
+            wake: heard_wake,
+            snr,
+        });
+    }
     let prompt = if wake {
         crate::WAKE_PROMPT
     } else {
@@ -699,7 +710,10 @@ fn process_audio(
             let listener = (settings.recognition == "deepgram")
                 .then(crate::deepgram::key)
                 .flatten()
-                .map(|key| crate::deepgram::Listener::start(&app, key, crate::apps::cached()));
+                .map(|key| {
+                    let terms = crate::deepgram::keyterms(&settings.custom_phrases, &crate::apps::cached());
+                    crate::deepgram::Listener::start(&app, key, terms)
+                });
             crate::chat::reset();
             session = Some(Active {
                 vad: Session::new(),

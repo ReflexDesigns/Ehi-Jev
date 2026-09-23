@@ -9,6 +9,7 @@ import { parseCommands } from './lib/commandParser';
 import {
   aiCreate,
   aiKeyConfigured,
+  cancelPower,
   deepgramKeyConfigured,
   checkForUpdate,
   closeApp,
@@ -55,6 +56,8 @@ const NOTICE_MS = 4000; // avviso a fine lavoro AI
 
 /** «… e premi invio» (come split_enter in lib.rs). */
 const ENTER = /(?:premi invio|e invia|dai invio|press enter)[\s.!,;]*$/i;
+/** Parole di chiusura che fermano anche lo spegnimento del PC in attesa. */
+const ABORT = /\b(?:annulla|cancel|stop|basta)\b/i;
 
 type Panel = 'settings' | 'keys' | 'tutorial' | 'learned';
 const PANEL_TITLES: Record<Panel, string> = {
@@ -177,9 +180,9 @@ export default function App() {
     }
   }, [hold]);
 
-  /** Esito a schermo. Laconico: a voce solo gli errori (l'app che si apre è già la risposta). */
+  /** Esito a schermo. Laconico: a voce (`say`) solo errori e avvisi (l'app che si apre è già la risposta). */
   const report = useCallback((message: string) => setStatus(message), []);
-  const fail = useCallback((message: string) => {
+  const say = useCallback((message: string) => {
     setStatus(message);
     void speak(message);
   }, []);
@@ -218,9 +221,19 @@ export default function App() {
         return;
       }
       if (action === 'cancel') {
-        setStatus('Ciao! 👋');
+        // «Annulla»/«stop» fermano anche uno spegnimento in attesa; «grazie» no.
+        if (ABORT.test(transcript) && (await cancelPower())) say('Annullato.');
+        else setStatus('Ciao! 👋');
         await endSession(); // Rust risponde con app:session-end
         return;
+      }
+      if (action === 'shutdown' || action === 'restart') {
+        // A voce solo «Spengo il PC tra 15 secondi»: se Maia dicesse «annulla», il filtro
+        // dell'eco scarterebbe l'«annulla» dell'utente. Come fermarlo resta scritto.
+        const notice = await executeAction(action);
+        setStatus(notice);
+        void speak(notice.split(':')[0]);
+        continue;
       }
       if (action.startsWith('open_app:')) {
         report(await openApp(action.slice('open_app:'.length)));
@@ -248,7 +261,7 @@ export default function App() {
       }
       report(await executeAction(action));
     }
-  }, [checkUpdates, report]);
+  }, [checkUpdates, report, say]);
 
   /** Strumento scelto da Gemini: si esegue subito, fuori dalla coda. */
   const runTool = useCallback(async ({ name, args }: ToolCall) => {
@@ -268,9 +281,9 @@ export default function App() {
         await endSession();
       } else if (name === 'not_a_command') report('Non è un comando.');
     } catch (error) {
-      fail(String(error));
+      say(String(error));
     }
-  }, [checkUpdates, fail, notify, report]);
+  }, [checkUpdates, say, notify, report]);
 
   /** Le frasi arrivano mentre si parla: una coda le esegue una alla volta. */
   const handleTranscript = useCallback((transcript: string) => {
@@ -280,12 +293,12 @@ export default function App() {
       try {
         await runCommands(transcript);
       } catch (error) {
-        fail(String(error)); // es. "Non trovo l'app «X»."
+        say(String(error)); // es. "Non trovo l'app «X»."
       } finally {
         busyRef.current -= 1;
       }
     });
-  }, [fail, runCommands]);
+  }, [say, runCommands]);
 
   const onWakeWord = useCallback(async () => {
     if (stateRef.current !== 'idle') return;

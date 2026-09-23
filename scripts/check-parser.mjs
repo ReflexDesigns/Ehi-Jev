@@ -33,6 +33,12 @@ const cases = {
   'Cri ha un documento sulla storia della pizza.': ['create_document'],
   'Scrivi mi un file di testo con la lista della spesa.': ['create_document'],
   'Fai un sito e web per il mio portfolio.': ['create_project'],
+  'Spegni il computer.': ['shutdown'],
+  'Spegni il PC, grazie.': ['shutdown', 'cancel'],
+  'Puoi spegnere il pc?': ['shutdown'],
+  'Riavvia il PC.': ['restart'],
+  'Restart the computer': ['restart'],
+  'Spegni la luce.': [],
   'Apri SmileSync.': ['open_app:smilesync'],
   'Apri Pit Stop, grazie.': ['open_app:pit stop', 'cancel'],
   'Apri il file.': ['open_app:file'],
@@ -73,6 +79,8 @@ assert.deepEqual(learn('Apri SmileSync', 'Apri Smile Sink.'), [['smile sink', 's
 assert.deepEqual(learn('Open the terminal', 'Open de terminal.'), []); // "de": troppo corta
 assert.deepEqual(learn('Show desktop', 'Sciò desktop'), [['scio', 'show']]);
 assert.deepEqual(learn('Grazie', 'E poi'), []); // frase diversa del tutto
+assert.deepEqual(learn('Fail', 'Fai.'), []); // "fai" → "fail" romperebbe «fai un sito»
+assert.deepEqual(learn('Apri Esplora file', 'Apri esplora fa il.'), []); // e "fa il" → "file" «che tempo fa il…»
 assert.deepEqual(learn('Apri il terminale', 'Aprilterminale'), [['aprilterminale', 'apri il terminale']]);
 const fixes = [['smile sink', 'smilesync'], ['scio', 'show']];
 assert.equal(applyCorrections('Apri Smile, Sink!', fixes), 'Apri smilesync!');

@@ -7,7 +7,7 @@ use std::{
     process::{Command, Stdio},
     ptr,
     sync::{
-        atomic::{AtomicIsize, Ordering},
+        atomic::{AtomicIsize, AtomicU64, Ordering},
         Mutex,
     },
     thread,
@@ -94,8 +94,9 @@ pub(crate) struct Settings {
     pub(crate) wake_aliases: Vec<String>,
     /// Correzioni imparate nel tutorial: [sentito, voluto].
     corrections: Vec<(String, String)>,
-    /// Frasi scritte dall'utente da far imparare a Whisper ("Apri SmileSync").
-    custom_phrases: Vec<String>,
+    /// Frasi insegnate dall'utente ("Apri SmileSync"): parole chiave di Deepgram e frasi
+    /// del tutorial di Whisper.
+    pub(crate) custom_phrases: Vec<String>,
 }
 
 impl Default for Settings {
@@ -293,7 +294,7 @@ fn set_clickthrough(app: &AppHandle, ignore: bool) -> Result<(), String> {
 }
 
 /// PCM float mono -> WAV 16 bit (Whisper ricampiona da solo a 16 kHz).
-fn wav_bytes(samples: &[f32], sample_rate: u32) -> Vec<u8> {
+pub(crate) fn wav_bytes(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     let data_len = samples.len() as u32 * 2;
     let mut wav = [
         b"RIFF".as_slice(),
@@ -520,8 +521,52 @@ fn execute_action(app: AppHandle, action: String) -> Result<String, String> {
         "open_gpt" => open_url("https://chatgpt.com").map(|_| "ChatGPT aperto.".to_string()),
         "show_desktop" => send_chord(VK_LWIN, VK_D).map(|_| "Desktop mostrato.".to_string()),
         "close_current" => close_target_window(&app).map(|_| "Finestra chiusa.".to_string()),
+        "shutdown" => {
+            schedule_power("/s");
+            Ok("Spengo il PC tra 15 secondi: di' «annulla» per fermarlo.".into())
+        }
+        "restart" => {
+            schedule_power("/r");
+            Ok("Riavvio il PC tra 15 secondi: di' «annulla» per fermarlo.".into())
+        }
         _ => Err("Comando non consentito.".into()),
     }
+}
+
+/// Spegnimento o riavvio in attesa (0 = nessuno).
+static POWER: AtomicU64 = AtomicU64::new(0);
+/// Tempo per dire «annulla» se Jev ha capito male.
+const POWER_DELAY: Duration = Duration::from_secs(15);
+
+/// «Spegni/riavvia il PC» dopo POWER_DELAY. Poi `shutdown /t 0` senza /f: un'app con lavoro
+/// non salvato ferma lo spegnimento (con /t > 0 Windows chiuderebbe tutto a forza).
+fn schedule_power(flag: &'static str) {
+    let ticket = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |time| time.as_nanos() as u64);
+    POWER.store(ticket, Ordering::Release);
+    thread::spawn(move || {
+        thread::sleep(POWER_DELAY);
+        if power_due(ticket) {
+            let _ = Command::new("shutdown.exe")
+                .args([flag, "/t", "0"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn();
+        }
+    });
+}
+
+/// Il turno è ancora quello in attesa (non annullato né sostituito): tocca a lui.
+fn power_due(ticket: u64) -> bool {
+    POWER
+        .compare_exchange(ticket, 0, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
+
+/// «Annulla»: ferma lo spegnimento in attesa. Dice se ce n'era uno.
+#[tauri::command]
+fn cancel_power() -> bool {
+    POWER.swap(0, Ordering::AcqRel) != 0
 }
 
 /// Equivale ad Alt+F4 sulla finestra attiva al momento della wake word, mai su HeyJev
@@ -802,6 +847,7 @@ pub fn run() {
             hide_window,
             set_listening,
             execute_action,
+            cancel_power,
             jev_key_configured,
             set_jev_key,
             open_link,
@@ -838,5 +884,19 @@ mod tests {
         assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 48_000);
         assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 6);
         assert_eq!(i16::from_le_bytes([wav[46], wav[47]]), i16::MAX);
+    }
+
+    /// Solo i turni, mai `shutdown.exe`: il test non spegne il PC.
+    #[test]
+    fn annulla_stops_the_pending_shutdown() {
+        use super::{cancel_power, power_due, Ordering, POWER};
+        POWER.store(7, Ordering::Release);
+        assert!(cancel_power());
+        assert!(!power_due(7), "annullato: non si spegne");
+        assert!(!cancel_power(), "niente in attesa");
+        POWER.store(8, Ordering::Release);
+        assert!(!power_due(7), "un comando più vecchio non vale");
+        assert!(power_due(8));
+        assert!(!cancel_power(), "già partito");
     }
 }

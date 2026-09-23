@@ -25,9 +25,12 @@ export function words(text: string): string[] {
     .filter(Boolean);
 }
 
-// Parole troppo comuni per diventare da sole una correzione ("e" → "grazie" romperebbe tutto).
+// Parole troppo comuni per diventare da sole una correzione ("e" → "grazie" romperebbe tutto;
+// "fai" → "fail" rompeva «fai un sito», "fa il" → "file" «che tempo fa il weekend»).
 const COMMON = new Set(
-  'e ed o poi il lo la i gli le l un una uno di a da in con su per che non si the and or an to of on for then ok'.split(' '),
+  'e ed o poi il lo la i gli le l un una uno di a da in con su per che non si fa fai fare apri chiudi crea scrivi cerca mostra the and or an to of on for then ok'.split(
+    ' ',
+  ),
 );
 
 /** Distanza di edit (Levenshtein). */
@@ -95,13 +98,15 @@ export function applyCorrections(text: string, corrections: Correction[]): strin
 
 const VAD_RATIOS = [5, 4, 3, 2.4, 1.8]; // come Settings::vad_ratio in lib.rs
 
+/** Una «Hey Jev» sentita da Whisper vale come alias solo se contiene "Jev" o quasi
+ *  ("jeff", "gev"…): rumore e altre voci non diventano alias. */
+export const likeJev = (alias: string) => words(alias).some((w) => /^(?:d?j|g)e(?:v+|f+|b)$/.test(w));
+
 /** Profilo voce da salvare nelle impostazioni, più il riepilogo per l'utente. */
 export function buildProfile(results: TutorialResult[]) {
   const wake = results.filter((r) => r.wake);
   const wakeHits = wake.filter((r) => r.sample.wake).length;
-  // Il rilevatore offline non la prende sempre: si impara come la sente Whisper. Vale solo
-  // ciò che contiene "Jev" o quasi ("jeff", "gev"…): rumore e altre voci non diventano alias.
-  const likeJev = (alias: string) => words(alias).some((w) => /^(?:d?j|g)e(?:v+|f+|b)$/.test(w));
+  // Il rilevatore offline non la prende sempre: si impara come la sente Whisper.
   const wakeAliases =
     wakeHits < wake.length ? [...new Set(wake.map((r) => words(r.sample.text).join(' ')))].filter(likeJev).slice(0, 8) : [];
   const phrases = results.filter((r) => !r.wake);
