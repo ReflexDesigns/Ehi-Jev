@@ -121,8 +121,9 @@ body,
   text-overflow: ellipsis;
 }
 
-/* Esiti (anche errori lunghi): fino a 3 righe invece dei puntini. */
-.notch-done .notch-status {
+/* Esiti e risposte di Jev: fino a 3 righe invece dei puntini. */
+.notch-done .notch-status,
+.notch-speaking .notch-status {
   display: -webkit-box;
   padding: 9px 0;
   white-space: normal;
@@ -182,7 +183,7 @@ body,
     opacity: 0;
   }
   to {
-    max-height: 420px;
+    max-height: 440px;
     opacity: 1;
   }
 }
@@ -197,7 +198,7 @@ body,
 .notch-panel input:not([type='range']),
 .notch-panel select {
   width: 190px;
-  padding: 7px 10px;
+  padding: 5px 10px;
   border: 1px solid var(--field-line);
   border-radius: 10px;
   outline: none;
@@ -233,7 +234,7 @@ body,
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  margin-top: 10px;
+  margin-top: 8px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -247,6 +248,21 @@ body,
   width: 190px;
   margin: 0;
   accent-color: var(--accent);
+}
+
+.settings-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* Tutorial voce: la frase da leggere, grande. */
+.tutorial-phrase {
+  margin: 4px 0 10px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
 }
 
 .notch-panel .settings-error {

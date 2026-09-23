@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, PhysicalPosition, State, Url, WindowEvent,
+    AppHandle, Emitter, Manager, PhysicalPosition, State, WindowEvent,
 };
 use tauri_plugin_updater::{Update, UpdaterExt};
 use windows_sys::Win32::{
@@ -38,6 +38,10 @@ use windows_sys::Win32::{
 };
 
 mod ai;
+mod apps;
+mod chat;
+mod deepgram;
+mod speaker;
 mod wake;
 use wake::WakeController;
 
@@ -57,15 +61,19 @@ struct UpdateSummary {
     notes: Option<String>,
 }
 
-const UPDATE_TOKEN_SERVICE: &str = "com.heyjev.app";
-const UPDATE_TOKEN_ACCOUNT: &str = "private-github-releases";
-const UPDATE_RELEASES_API: &str = "https://api.github.com/repos/ReflexDesigns/Ehi-Jev/releases";
+/// Servizio delle chiavi API nel Credential Manager di Windows.
+const SECRET_SERVICE: &str = "com.heyjev.app";
+const JEV_KEY_ACCOUNT: &str = "jev-api-key";
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const WHISPER_TIMEOUT: Duration = Duration::from_secs(20);
 // Vocabolario dei comandi: guida Whisper tiny verso le frasi attese (IT + EN).
 // Solo italiano: il prompt misto IT/EN faceva sbagliare "Apri Claude"; l'inglese resta ok (misurato).
-const WHISPER_PROMPT: &str = "Apri terminale. Apri Claude. Apri ChatGPT. Mostra desktop. Chiudi questo. Controlla aggiornamenti. Crea un documento. Crea un sito. Grazie. Silenzio.";
+pub(crate) const WHISPER_PROMPT: &str = "Apri terminale. Apri Claude. Apri ChatGPT. Mostra desktop. Chiudi questo. Controlla aggiornamenti. Crea un documento. Crea un sito. Grazie. Silenzio.";
+/// Wake word via Whisper (tutorial e riserva). Senza prompt Whisper tiny la storpia a caso
+/// ("Ingeto", "Hai taggiare"); con questo esce stabile: 11/12 campioni, falsi positivi 1/24
+/// e solo su "Hey Jeff" (misurato su TTS).
+pub(crate) const WAKE_PROMPT: &str = "Hey Jev.";
 
 /// Impostazioni utente, in `%APPDATA%\com.heyjev.app\settings.json`.
 #[derive(Clone, Serialize, Deserialize)]
@@ -77,6 +85,16 @@ pub(crate) struct Settings {
     mic_sensitivity: u8,
     /// Secondi di silenzio dopo i quali la sessione si chiude.
     pub(crate) idle_seconds: f32,
+    /// Notifica di Windows quando un documento o progetto AI è pronto.
+    pub(crate) notifications: bool,
+    /// Chi ascolta i comandi: "deepgram" (streaming online, se c'è la chiave) o "local" (Whisper).
+    pub(crate) recognition: String,
+    /// Tutorial voce fatto: al primo avvio parte da solo.
+    voice_trained: bool,
+    /// Come Whisper sente la tua «Hey Jev» (dal tutorial). Vuoto = basta il KWS.
+    pub(crate) wake_aliases: Vec<String>,
+    /// Correzioni imparate nel tutorial: [sentito, voluto].
+    corrections: Vec<(String, String)>,
 }
 
 impl Default for Settings {
@@ -85,6 +103,11 @@ impl Default for Settings {
             language: "it".into(),
             mic_sensitivity: 4,
             idle_seconds: 2.5,
+            notifications: true,
+            recognition: "deepgram".into(),
+            voice_trained: false,
+            wake_aliases: Vec::new(),
+            corrections: Vec::new(),
         }
     }
 }
@@ -126,8 +149,16 @@ fn save_settings(
     settings: Settings,
 ) -> Result<(), String> {
     if !matches!(settings.language.as_str(), "it" | "en" | "auto")
+        || !matches!(settings.recognition.as_str(), "deepgram" | "local")
         || !(1..=5).contains(&settings.mic_sensitivity)
         || !(1.0..=10.0).contains(&settings.idle_seconds)
+        || settings.wake_aliases.len() > 8
+        || settings.corrections.len() > 64
+        || settings
+            .wake_aliases
+            .iter()
+            .chain(settings.corrections.iter().flat_map(|(heard, meant)| [heard, meant]))
+            .any(|text| text.len() > 120)
     {
         return Err("Impostazioni non valide.".into());
     }
@@ -169,12 +200,62 @@ fn load_environment(app: &tauri::AppHandle) {
     }
 }
 
-fn configured_key() -> Option<String> {
-    ["JEV_API_KEY", "TYPESAFE_API_KEY"]
-        .iter()
-        .filter_map(|name| env::var(name).ok())
+/// Chiave API: Credential Manager (Impostazioni), altrimenti variabili d'ambiente (.env.local).
+pub(crate) fn secret(account: &str, env_names: &[&str]) -> Option<String> {
+    keyring::Entry::new(SECRET_SERVICE, account)
+        .and_then(|entry| entry.get_password())
+        .ok()
+        .into_iter()
+        .chain(env_names.iter().filter_map(|name| env::var(name).ok()))
         .map(|value| value.trim().to_string())
         .find(|value| !value.is_empty() && !value.starts_with("your_"))
+}
+
+pub(crate) fn store_secret(account: &str, value: &str) -> Result<(), String> {
+    keyring::Entry::new(SECRET_SERVICE, account)
+        .and_then(|entry| entry.set_password(value))
+        .map_err(|_| "Windows non ha salvato la chiave nel Credential Manager.".into())
+}
+
+pub(crate) fn check_key_shape(key: &str) -> Result<(), String> {
+    if key.len() < 16 || key.len() > 512 || key.chars().any(char::is_whitespace) {
+        return Err("Chiave non valida: controlla il valore e riprova.".into());
+    }
+    Ok(())
+}
+
+fn jev_key() -> Option<String> {
+    secret(JEV_KEY_ACCOUNT, &["JEV_API_KEY", "TYPESAFE_API_KEY"])
+}
+
+/// Parole minuscole senza accenti né punteggiatura: confronti tolleranti con Whisper.
+/// Via i tag di Whisper per i suoni ("[Musica]", "(risate)"): non sono parole dette.
+pub(crate) fn words(text: &str) -> Vec<String> {
+    let mut tag = 0_i32;
+    text.to_lowercase()
+        .chars()
+        .map(|c| match c {
+            '[' | '(' => {
+                tag += 1;
+                ' '
+            }
+            ']' | ')' => {
+                tag = (tag - 1).max(0);
+                ' '
+            }
+            _ if tag > 0 => ' ',
+            'à' | 'á' | 'â' | 'ä' => 'a',
+            'è' | 'é' | 'ê' | 'ë' => 'e',
+            'ì' | 'í' | 'î' | 'ï' => 'i',
+            'ò' | 'ó' | 'ô' | 'ö' => 'o',
+            'ù' | 'ú' | 'û' | 'ü' => 'u',
+            c if c.is_alphanumeric() => c,
+            _ => ' ',
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
 }
 
 #[tauri::command]
@@ -230,10 +311,12 @@ fn wav_bytes(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     wav
 }
 
+/// `prompt`: frasi attese, guidano Whisper tiny (comandi o wake word).
 pub(crate) fn transcribe(
     app: &AppHandle,
     samples: &[f32],
     sample_rate: u32,
+    prompt: &str,
 ) -> Result<String, String> {
     let model = resource_path(app, "WHISPER_MODEL_PATH", "models/whisper/ggml-tiny.bin")?;
     let binary = resource_path(app, "WHISPER_CPP_BIN", "models/whisper/bin/whisper-cli.exe")?;
@@ -255,7 +338,7 @@ pub(crate) fn transcribe(
         .arg(&model)
         .arg("-f")
         .arg(&input)
-        .args(["-l", language.as_str(), "--prompt", WHISPER_PROMPT])
+        .args(["-l", language.as_str(), "--prompt", prompt])
         // Greedy (-bs 1 -bo 1) e più thread: ~0,6 s a frase invece di ~1,1 s (misurato).
         .args([
             "-t",
@@ -326,12 +409,8 @@ pub(crate) fn resource_path(
     }
 }
 
-#[tauri::command]
-async fn parse_intent(transcript: String) -> Result<IntentResult, String> {
-    if transcript.trim().is_empty() || transcript.len() > 1_500 {
-        return Err("Trascrizione vuota o troppo lunga.".into());
-    }
-    let key = configured_key().ok_or_else(|| "Configura JEV_API_KEY per usare Jev.".to_string())?;
+/// Chiede a Jev (TypeSafe) di classificare la frase tra le azioni consentite.
+async fn jev_request(key: &str, transcript: &str) -> Result<Value, String> {
     let base = env::var("JEV_API_BASE_URL").unwrap_or_else(|_| "https://api.typesafe.ai/v1".into());
     if !base.starts_with("https://") {
         return Err("JEV_API_BASE_URL deve usare https://.".into());
@@ -380,10 +459,19 @@ async fn parse_intent(transcript: String) -> Result<IntentResult, String> {
     if !response.status().is_success() {
         return Err(format!("Jev ha restituito HTTP {}.", response.status()));
     }
-    let body: Value = response
+    response
         .json()
         .await
-        .map_err(|error| format!("Risposta Jev non valida: {error}"))?;
+        .map_err(|error| format!("Risposta Jev non valida: {error}"))
+}
+
+#[tauri::command]
+async fn parse_intent(transcript: String) -> Result<IntentResult, String> {
+    if transcript.trim().is_empty() || transcript.len() > 1_500 {
+        return Err("Trascrizione vuota o troppo lunga.".into());
+    }
+    let key = jev_key().ok_or_else(|| "Chiave Jev non configurata: Impostazioni → Chiave Jev.".to_string())?;
+    let body = jev_request(&key, &transcript).await?;
     let answer = body
         .get("answers")
         .and_then(|answers| answers.get("operation"))
@@ -448,112 +536,28 @@ async fn parse_intent(transcript: String) -> Result<IntentResult, String> {
     })
 }
 
-fn update_token_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(UPDATE_TOKEN_SERVICE, UPDATE_TOKEN_ACCOUNT)
-        .map_err(|_| "Windows Credential Manager non è disponibile.".to_string())
-}
-
-fn stored_update_token() -> Result<String, String> {
-    update_token_entry()?.get_password().map_err(|_| {
-        "Token GitHub non configurato. Apri la tray e scegli ‘Configura aggiornamenti’.".to_string()
-    })
-}
-
-fn validate_token_shape(token: &str) -> Result<(), String> {
-    if token.len() < 20 || token.len() > 512 || token.chars().any(char::is_whitespace) {
-        return Err("Token non valido: controlla il valore e riprova.".into());
-    }
-    Ok(())
-}
-
-fn github_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(12))
-        .user_agent("HeyJev-Updater")
-        .build()
-        .map_err(|_| "Impossibile inizializzare il client GitHub.".to_string())
-}
-
-/// Repo privato: `github.com/.../releases/latest/download/latest.json` dà 404 anche col token.
-/// Si passa dall'API: URL dell'asset `latest.json` della release più recente.
-async fn latest_manifest_url(token: &str) -> Result<Url, String> {
-    let release: Value = github_client()?
-        .get(format!("{UPDATE_RELEASES_API}/latest"))
-        .bearer_auth(token)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|_| "GitHub non raggiungibile: controlla la connessione.".to_string())?
-        .error_for_status()
-        .map_err(|error| format!("GitHub ha rifiutato la richiesta release: {error}"))?
-        .json()
-        .await
-        .map_err(|error| format!("Risposta release GitHub non valida: {error}"))?;
-    release["assets"]
-        .as_array()
-        .and_then(|assets| assets.iter().find(|asset| asset["name"] == "latest.json"))
-        .and_then(|asset| asset["url"].as_str())
-        .and_then(|url| url.parse().ok())
-        .ok_or_else(|| "L'ultima release GitHub non contiene latest.json.".to_string())
-}
-
-async fn verify_release_read_access(token: &str) -> Result<(), String> {
-    let response = github_client()?
-        .get(UPDATE_RELEASES_API)
-        .bearer_auth(token)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|_| "GitHub non raggiungibile: controlla la connessione.".to_string())?;
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err("Token rifiutato o privo di accesso alle release private. Serve Contents: read su ReflexDesigns/Ehi-Jev.".into())
-    }
-}
-
-async fn save_update_token(token: String) -> Result<(), String> {
-    let token = token.trim().to_string();
-    validate_token_shape(&token)?;
-    verify_release_read_access(&token).await?;
-    update_token_entry()?
-        .set_password(&token)
-        .map_err(|_| "Windows non ha salvato il token nel Credential Manager.".to_string())
-}
-
 #[tauri::command]
-async fn set_update_token(token: String) -> Result<(), String> {
-    save_update_token(token).await
+fn jev_key_configured() -> bool {
+    jev_key().is_some()
 }
 
-/// Importa GH_TOKEN/GITHUB_TOKEN caricato da `.env.local` senza restituire il segreto al frontend.
+/// Verifica la chiave con una frase di prova, poi la salva nel Credential Manager.
 #[tauri::command]
-async fn import_update_token_from_env() -> Result<(), String> {
-    let token = ["GH_TOKEN", "GITHUB_TOKEN"]
-        .iter()
-        .find_map(|name| env::var(name).ok())
-        .ok_or_else(|| "Non trovo GH_TOKEN o GITHUB_TOKEN nell'ambiente dell'app.".to_string())?;
-    save_update_token(token).await
+async fn set_jev_key(key: String) -> Result<(), String> {
+    let key = key.trim();
+    check_key_shape(key)?;
+    jev_request(key, "apri il terminale").await?;
+    store_secret(JEV_KEY_ACCOUNT, key)
 }
 
+/// Repo pubblico: l'updater legge `latest.json` dell'ultima release (endpoint in tauri.conf.json).
 #[tauri::command]
 async fn check_for_update(
     app: AppHandle,
     pending: State<'_, PendingUpdate>,
 ) -> Result<Option<UpdateSummary>, String> {
-    let token = stored_update_token()?;
-    let manifest = latest_manifest_url(&token).await?;
-    // Accept octet-stream vale per manifest e installer (asset API); reqwest toglie
-    // Authorization sul redirect cross-host verso lo storage firmato di GitHub.
     let update = app
-        .updater_builder()
-        .endpoints(vec![manifest])
-        .map_err(|error| format!("Endpoint updater non valido: {error}"))?
-        .header("Authorization", format!("Bearer {token}"))
-        .map_err(|_| "Impossibile preparare l'autenticazione GitHub.".to_string())?
-        .header("Accept", "application/octet-stream")
-        .map_err(|_| "Impossibile preparare la richiesta updater.".to_string())?
-        .build()
+        .updater()
         .map_err(|error| format!("Configurazione updater non valida: {error}"))?
         .check()
         .await
@@ -705,6 +709,7 @@ pub fn run() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         // Alt+F4 sull'overlay non deve chiudere HeyJev: si esce solo dalla tray.
         .on_window_event(|_, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -716,6 +721,8 @@ pub fn run() {
         .manage(SettingsState::default())
         .setup(|app| {
             load_environment(app.handle());
+            apps::preload();
+            speaker::init(app.handle());
             let saved = settings_file(app.handle())
                 .and_then(|path| fs::read_to_string(path).ok())
                 .and_then(|json| serde_json::from_str(&json).ok());
@@ -770,6 +777,13 @@ pub fn run() {
             wake::start_wake_listener,
             wake::set_wake_enabled,
             wake::end_session,
+            wake::record_sample,
+            apps::open_app,
+            apps::list_apps,
+            chat::interpret,
+            deepgram::deepgram_key_configured,
+            deepgram::set_deepgram_key,
+            deepgram::speak_text,
             get_settings,
             save_settings,
             show_window,
@@ -777,8 +791,8 @@ pub fn run() {
             set_listening,
             parse_intent,
             execute_action,
-            set_update_token,
-            import_update_token_from_env,
+            jev_key_configured,
+            set_jev_key,
             check_for_update,
             install_pending_update,
             ai::ai_create,

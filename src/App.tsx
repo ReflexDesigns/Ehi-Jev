@@ -2,31 +2,39 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import Notch from './components/Notch';
 import SettingsPanel from './components/SettingsPanel';
+import VoiceTutorial from './components/VoiceTutorial';
 import { parseCommands } from './lib/commandParser';
 import {
   aiCreate,
   checkForUpdate,
   endSession,
   executeAction,
+  getSettings,
   hideWindow,
-  importUpdateTokenFromEnv,
   installPendingUpdate,
+  interpret,
+  openApp,
   parseIntent,
+  saveSettings,
   setListening,
-  setUpdateToken,
   setWakeEnabled,
   showWindow,
+  speak,
   startWakeListener,
+  type Settings,
+  type ToolCall,
   type UpdateSummary,
 } from './lib/osControl';
+import { applyCorrections, type Correction } from './lib/voiceProfile';
 import type { AppState } from './types';
 
 /**
  * HeyJev - Direttore Operativo Vocale del PC.
  *
- * «Hey Jev» apre una sessione: il backend Rust ascolta, taglia ogni frase alla
- * prima pausa e la trascrive con Whisper mentre continua ad ascoltare; la UI
- * esegue i comandi appena arrivano. La sessione finisce dopo qualche secondo di
+ * «Hey Jev» apre una sessione: il backend Rust manda il microfono a Deepgram in
+ * streaming (o taglia le frasi per Whisper locale) e la UI esegue i comandi appena
+ * arrivano. Le frasi che il parser non riconosce le traduce Gemini in uno strumento:
+ * Jev è laconico, esegue e basta; la voce Maia parla solo per errori e avvisi. La sessione finisce dopo qualche secondo di
  * silenzio (Impostazioni) oppure con «grazie» / «ok» / «silenzio».
  * «Crea un documento/sito…» avvia una dettatura: tutto ciò che segue fino alla fine
  * della sessione è la richiesta, eseguita in background da OpenRouter.
@@ -37,14 +45,22 @@ import type { AppState } from './types';
 const WAKE_RETRY_MS = 5000; // riavvio del rilevatore dopo un errore microfono
 const LAST_RESULT_MS = 700; // l'ultimo esito resta visibile prima di chiudere
 const NOTICE_MS = 4000; // avviso a fine lavoro AI
+/** Strumenti di Jev che corrispondono ad azioni già esistenti. */
+const TOOL_ACTIONS: Record<string, string> = {
+  open_terminal: 'open_terminal',
+  open_claude: 'open_claude',
+  open_chatgpt: 'open_gpt',
+  show_desktop: 'show_desktop',
+  close_window: 'close_current',
+};
 
 export default function App() {
   const [state, setState] = useState<AppState>('setup');
   const [status, setStatus] = useState('Avvio del motore vocale…');
-  const [showUpdateTokenSetup, setShowUpdateTokenSetup] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [updateTokenBusy, setUpdateTokenBusy] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState<UpdateSummary | null>(null);
+  const [speaking, setSpeaking] = useState(false); // Jev sta parlando: onda "calda"
 
   const stateRef = useRef<AppState>('idle');
   const levelRef = useRef(0);
@@ -55,6 +71,13 @@ export default function App() {
   const holdRef = useRef(false); // pannello aperto: non chiudere da soli
   const draftRef = useRef<{ kind: string; text: string } | null>(null); // richiesta AI in dettatura
   const queueRef = useRef<Promise<void>>(Promise.resolve());
+  const correctionsRef = useRef<Correction[]>([]); // imparate nel tutorial voce
+
+  /** Le correzioni del tutorial sono errori tipici di Whisper: con Deepgram non servono
+   *  (e "fa il" → "file" rovinerebbe "che tempo fa il weekend"). */
+  const loadCorrections = (settings: Settings | null) => {
+    correctionsRef.current = settings?.recognition === 'local' ? settings.corrections : [];
+  };
 
   const applyState = useCallback((s: AppState) => {
     stateRef.current = s;
@@ -64,8 +87,8 @@ export default function App() {
   /** Chiusura: la pillola si restringe e risale, poi click-through. */
   const close = useCallback(async () => {
     holdRef.current = false;
-    setShowUpdateTokenSetup(false);
     setShowSettings(false);
+    setShowTutorial(false);
     setUpdateAvailable(null);
     applyState('closing');
     setStatus('');
@@ -87,6 +110,7 @@ export default function App() {
   /** Esito di un lavoro AI in background: nella sessione aperta, altrimenti avviso di qualche secondo. */
   const notify = useCallback((message: string) => {
     setStatus(message);
+    void speak(message.split(':')[0]); // "Documento salvato in Download", senza il nome file
     if (sessionRef.current || holdRef.current || stateRef.current === 'setup') return;
     applyState('done');
     window.setTimeout(() => {
@@ -132,17 +156,20 @@ export default function App() {
       setUpdateAvailable(available);
       return `È disponibile HeyJev ${available.version}. Conferma con il pulsante per installarla.`;
     } catch (error) {
-      const message = `Errore: ${String(error)}`;
-      if (message.includes('Token GitHub non configurato')) {
-        await hold('setup');
-        setShowUpdateTokenSetup(true);
-      }
-      return message;
+      return `Errore: ${String(error)}`;
     }
   }, [hold]);
 
+  /** Esito a schermo. Laconico: a voce solo gli errori (l'app che si apre è già la risposta). */
+  const report = useCallback((message: string) => setStatus(message), []);
+  const fail = useCallback((message: string) => {
+    setStatus(message);
+    void speak(message);
+  }, []);
+
   /** Esegue in ordine i comandi di una frase. */
-  const runCommands = useCallback(async (transcript: string) => {
+  const runCommands = useCallback(async (heard: string) => {
+    const transcript = applyCorrections(heard, correctionsRef.current);
     let actions = parseCommands(transcript);
     const draft = draftRef.current;
     if (draft) {
@@ -153,11 +180,19 @@ export default function App() {
       return;
     }
     if (!actions.length) {
+      // Il parser non la riconosce: Gemini sceglie lo strumento (app:tool → runTool).
+      // Senza chiave OpenRouter resta il classificatore Jev/TypeSafe.
       try {
-        const intent = await parseIntent(transcript);
-        if (intent.action) actions = [intent.action];
+        setStatus(transcript);
+        await interpret(transcript);
+        return;
       } catch {
-        // Jev non configurato/irraggiungibile: frase non riconosciuta.
+        try {
+          const intent = await parseIntent(transcript);
+          if (intent.action) actions = [intent.action];
+        } catch {
+          // Nessun servizio configurato o raggiungibile: frase non riconosciuta.
+        }
       }
     }
     if (!actions.length) {
@@ -176,14 +211,37 @@ export default function App() {
         await endSession(); // Rust risponde con app:session-end
         return;
       }
+      if (action.startsWith('open_app:')) {
+        report(await openApp(action.slice('open_app:'.length)));
+        continue;
+      }
       if (action === 'check_update') {
-        setStatus(await checkUpdates());
+        report(await checkUpdates());
         if (holdRef.current) return;
         continue;
       }
-      setStatus(await executeAction(action));
+      report(await executeAction(action));
     }
-  }, [checkUpdates]);
+  }, [checkUpdates, report]);
+
+  /** Strumento scelto da Gemini: si esegue subito, fuori dalla coda. */
+  const runTool = useCallback(async ({ name, args }: ToolCall) => {
+    try {
+      if (name in TOOL_ACTIONS) report(await executeAction(TOOL_ACTIONS[name]));
+      else if (name === 'open_app') report(await openApp(args.name ?? ''));
+      else if (name === 'check_updates') report(await checkUpdates());
+      else if (name === 'create_document' || name === 'create_website') {
+        const kind = name === 'create_document' ? 'create_document' : 'create_project';
+        report(kind === 'create_document' ? 'Gemini scrive il documento…' : 'DeepSeek prepara il progetto…');
+        aiCreate(kind, args.request ?? '').then(notify, (error) => notify(`Errore AI: ${String(error)}`));
+      } else if (name === 'end_conversation') {
+        setStatus('Ciao! 👋');
+        await endSession();
+      } else if (name === 'not_a_command') report('Non è un comando.');
+    } catch (error) {
+      fail(String(error));
+    }
+  }, [checkUpdates, fail, notify, report]);
 
   /** Le frasi arrivano mentre si parla: una coda le esegue una alla volta. */
   const handleTranscript = useCallback((transcript: string) => {
@@ -193,12 +251,12 @@ export default function App() {
       try {
         await runCommands(transcript);
       } catch (error) {
-        setStatus(`Errore: ${String(error)}`);
+        fail(String(error)); // es. "Non trovo l'app «X»."
       } finally {
         busyRef.current -= 1;
       }
     });
-  }, [runCommands]);
+  }, [fail, runCommands]);
 
   const onWakeWord = useCallback(async () => {
     if (stateRef.current !== 'idle') return;
@@ -225,6 +283,10 @@ export default function App() {
       applyState('idle');
       setStatus('Ascolto offline attivo · di’ «Hey Jev».');
       void hideWindow().catch(() => undefined);
+      const settings = await getSettings().catch(() => null);
+      loadCorrections(settings);
+      // Primo avvio: prima di tutto il tutorial voce.
+      if (settings && !settings.voiceTrained) void openTutorialRef.current();
     } catch (error) {
       wakeReadyRef.current = false;
       applyState('setup');
@@ -244,7 +306,7 @@ export default function App() {
       await showWindow();
       await setListening(true);
       setUpdateAvailable(null);
-      setShowUpdateTokenSetup(false);
+      setShowTutorial(false);
       setShowSettings(true);
       applyState('setup');
       setStatus('Impostazioni');
@@ -252,6 +314,44 @@ export default function App() {
       setStatus(`Impossibile aprire le impostazioni: ${String(error)}`);
     }
   }, [applyState]);
+
+  /** Tutorial voce nell'isola; stato "listening" per l'onda che segue il microfono. */
+  const openTutorial = useCallback(async () => {
+    if (sessionRef.current) return;
+    try {
+      holdRef.current = true;
+      await setWakeEnabled(false);
+      await showWindow();
+      await setListening(true);
+      setUpdateAvailable(null);
+      setShowSettings(false);
+      setShowTutorial(true);
+      applyState('listening');
+      setStatus('Tutorial voce');
+    } catch (error) {
+      setStatus(`Impossibile aprire il tutorial: ${String(error)}`);
+    }
+  }, [applyState]);
+  const openTutorialRef = useRef(openTutorial);
+  openTutorialRef.current = openTutorial;
+
+  const finishTutorial = useCallback(async (summary: string) => {
+    setShowTutorial(false);
+    loadCorrections(await getSettings().catch(() => null));
+    holdRef.current = false;
+    applyState('done');
+    setStatus(summary);
+    window.setTimeout(() => {
+      if (stateRef.current === 'done') void close();
+    }, NOTICE_MS);
+  }, [applyState, close]);
+
+  /** Saltato: non si ripropone a ogni avvio (resta in Impostazioni → Tutorial voce). */
+  const skipTutorial = useCallback(async () => {
+    const settings = await getSettings().catch(() => null);
+    if (settings && !settings.voiceTrained) await saveSettings({ ...settings, voiceTrained: true }).catch(() => undefined);
+    void close();
+  }, [close]);
 
   const checkUpdatesFromSettings = useCallback(async () => {
     setShowSettings(false);
@@ -264,31 +364,6 @@ export default function App() {
       window.setTimeout(() => void close(), 1800);
     }
   }, [applyState, checkUpdates, close]);
-
-  const persistUpdateToken = useCallback(async (save: () => Promise<void>) => {
-    setUpdateTokenBusy(true);
-    try {
-      await save();
-      setShowUpdateTokenSetup(false);
-      setStatus('Token verificato e salvato nel Credential Manager di Windows.');
-      if (wakeReadyRef.current) window.setTimeout(() => void close(), 1200);
-    } catch (error) {
-      setStatus(String(error));
-      throw error;
-    } finally {
-      setUpdateTokenBusy(false);
-    }
-  }, [close]);
-
-  const saveUpdateToken = useCallback(
-    (token: string) => persistUpdateToken(() => setUpdateToken(token)),
-    [persistUpdateToken],
-  );
-
-  const importTokenFromEnv = useCallback(
-    () => persistUpdateToken(() => importUpdateTokenFromEnv()),
-    [persistUpdateToken],
-  );
 
   const installUpdate = useCallback(async () => {
     setUpdateAvailable(null);
@@ -317,6 +392,17 @@ export default function App() {
         if (sessionRef.current && busyRef.current === 0 && !draftRef.current) setStatus('Trascrizione…');
       }),
       listen<string>('app:transcript', (event) => handleTranscript(event.payload.trim())),
+      // Deepgram: la frase mentre la stai dicendo.
+      listen<string>('app:interim', (event) => {
+        if (!sessionRef.current) return;
+        const draft = draftRef.current;
+        setStatus(draft ? `✍️ ${draft.text} ${event.payload}` : event.payload);
+      }),
+      listen<ToolCall>('app:tool', (event) => void runTool(event.payload)),
+      listen<boolean>('app:speaking', (event) => setSpeaking(event.payload)),
+      listen('app:barge-in', () => {
+        if (sessionRef.current) setStatus('Ti ascolto…');
+      }),
       listen<string>('app:transcript-error', (event) => {
         if (sessionRef.current) setStatus(`Errore trascrizione: ${event.payload}`);
       }),
@@ -341,35 +427,31 @@ export default function App() {
       unlisteners.forEach((unlisten) => unlisten());
       void setWakeEnabled(false);
     };
-  }, [activateWakeWord, applyState, finishSession, handleTranscript, onWakeWord, openSettings]);
+  }, [activateWakeWord, applyState, finishSession, handleTranscript, onWakeWord, openSettings, runTool]);
 
   return (
     <Notch
       state={state}
       status={status}
       getLevel={state === 'listening' ? getLevel : undefined}
-      showTokenSetup={showUpdateTokenSetup}
-      tokenBusy={updateTokenBusy}
+      speaking={speaking}
       updateAvailable={updateAvailable}
       onActivate={() => void activateWakeWord()}
-      onSaveUpdateToken={saveUpdateToken}
-      onImportUpdateToken={importTokenFromEnv}
-      onCancelTokenSetup={() => {
-        setShowUpdateTokenSetup(false);
-        if (wakeReadyRef.current) void close();
-      }}
       onInstallUpdate={() => void installUpdate()}
       onDismissUpdate={() => void close()}
     >
       {showSettings ? (
         <SettingsPanel
-          onClose={() => void close()}
-          onCheckUpdate={() => void checkUpdatesFromSettings()}
-          onConfigureToken={() => {
-            setShowSettings(false);
-            setShowUpdateTokenSetup(true);
+          onClose={() => {
+            void getSettings().then(loadCorrections, () => undefined); // "chi ascolta" può essere cambiato
+            void close();
           }}
+          onCheckUpdate={() => void checkUpdatesFromSettings()}
+          onTutorial={() => void openTutorial()}
         />
+      ) : null}
+      {showTutorial ? (
+        <VoiceTutorial onDone={(summary) => void finishTutorial(summary)} onSkip={() => void skipTutorial()} />
       ) : null}
     </Notch>
   );

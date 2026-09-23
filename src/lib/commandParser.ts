@@ -6,6 +6,30 @@
  * `\s*` e `p+`: Whisper tiny a volte fonde o raddoppia ("Apriterminale", "Appri").
  */
 
+import { distance } from './voiceProfile.ts';
+
+/**
+ * Whisper tiny storpia di una lettera o due le parole dei comandi ("amnula", "opin",
+ * "grazzie"): prima delle regole, ogni parola vicina a questo vocabolario diventa quella
+ * giusta. Esclusi di proposito i verbi di creazione ("area" → "crea" avvierebbe una
+ * dettatura) e "chiudi" ("chiedi" → "chiudi" chiuderebbe una finestra).
+ */
+const VOCABULARY =
+  'apri avvia lancia open launch mostra show check close controlla verifica terminale terminal desktop scrivania finestra window aggiornamenti updates annulla grazie silenzio cancel'.split(
+    ' ',
+  );
+
+function tolerant(text: string): string {
+  return text.replace(/\p{L}+/gu, (word) => {
+    if (word.length < 4 || VOCABULARY.includes(word)) return word;
+    // "Aprisplora file": verbo attaccato al nome dell'app ("aprile" resta aprile).
+    const glued = /^ap+r[ie](\p{L}{4,})$/u.exec(word);
+    if (glued) return `apri ${glued[1]}`;
+    const near = VOCABULARY.find((v) => Math.abs(v.length - word.length) <= 2 && distance(word, v) <= (v.length >= 7 ? 2 : 1));
+    return near ?? word;
+  });
+}
+
 interface CommandRule {
   action: string;
   patterns: RegExp[];
@@ -14,7 +38,7 @@ interface CommandRule {
 const OPEN = String.raw`\b(?:ap+ri|avvia|open|launch)\s*`;
 
 const RULES: CommandRule[] = [
-  { action: 'open_terminal', patterns: [new RegExp(OPEN + String.raw`(?:il\s*)?terminal(?:e)?\b`, 'gi')] },
+  { action: 'open_terminal', patterns: [new RegExp(OPEN + String.raw`(?:(?:il|the|di|de)\s*)?terminal(?:e)?\b`, 'gi')] },
   // "Apriclonde", "apri cloud": come Whisper tiny sente "Claude".
   { action: 'open_claude', patterns: [new RegExp(OPEN + String.raw`(?:cl[ao]u?n?de|cloud)\b`, 'gi')] },
   { action: 'open_gpt', patterns: [new RegExp(OPEN + String.raw`(?:chat\s*gpt|gpt)\b`, 'gi')] },
@@ -62,6 +86,13 @@ function creation(text: string): { action: string; index: number } | null {
   return { action: kinds[0].action, index: verb.index };
 }
 
+/**
+ * «Apri <nome>» che non è un comando fisso: app del menu Start (`open_app:<nome>`,
+ * cercata con tolleranza in src-tauri/src/apps.rs). Il nome finisce a pausa, "e", "poi", "grazie"…
+ */
+const OPEN_APP =
+  /\b(?:ap+ri|avvia|lancia|open|launch|start)\s+(?:(?:l['’]\s*)?app(?:licazione)?\s+|il\s+programma\s+|l['’]\s*|(?:il|lo|la|i|gli|le|the)\s+)?([^,.;:!?]+?)\s*(?=[,.;:!?]|\s(?:e|ed|and|poi|then|per\s+favore|please|grazie|thanks?)\b|$)/gi;
+
 /** Parole che chiudono la sessione di ascolto. */
 const STOP = /\b(?:grazie(?:\s*mille)?|silenzio|basta|stop|ok(?:ay)?|annulla|cancel|ciao|thank\s*you)\b/gi;
 
@@ -71,12 +102,16 @@ const STOP = /\b(?:grazie(?:\s*mille)?|silenzio|basta|stop|ok(?:ay)?|annulla|can
  * comando: "ok, apri terminale" apre il terminale, "apri terminale, grazie" apre e chiude.
  */
 export function parseCommands(transcript: string): string[] {
-  const text = transcript.toLowerCase();
+  const text = tolerant(transcript.toLowerCase());
   const found: { action: string; index: number }[] = [];
   for (const rule of RULES) {
     for (const pattern of rule.patterns) {
       for (const match of text.matchAll(pattern)) found.push({ action: rule.action, index: match.index ?? 0 });
     }
+  }
+  for (const match of text.matchAll(OPEN_APP)) {
+    const index = match.index ?? 0;
+    if (!found.some((command) => command.index === index)) found.push({ action: `open_app:${match[1]}`, index });
   }
   // Dopo "crea …" il resto è la richiesta per l'AI, non altri comandi.
   const create = creation(text);

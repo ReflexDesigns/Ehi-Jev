@@ -6,8 +6,8 @@
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc::{channel, sync_channel, Receiver, SyncSender, TrySendError},
-        Arc,
+        mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TrySendError},
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -17,14 +17,37 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, SampleFormat, SizedSample, Stream, StreamConfig,
 };
-use sherpa_onnx::{KeywordSpotter, KeywordSpotterConfig};
+use serde::Serialize;
+use sherpa_onnx::{KeywordSpotter, KeywordSpotterConfig, OnlineStream};
 use tauri::{AppHandle, Emitter, State};
+
+use crate::speaker;
 
 #[derive(Default)]
 pub struct WakeController {
     enabled: Arc<AtomicBool>,
     started: Arc<AtomicBool>,
     end_session: Arc<AtomicBool>,
+    /// Tutorial: il worker registra la prossima frase e la manda qui.
+    capture: Arc<Mutex<Option<Sender<Capture>>>>,
+}
+
+/// Frase registrata nel tutorial, con l'esito del KWS mentre la si diceva.
+pub struct Capture {
+    samples: Vec<f32>,
+    rate: u32,
+    wake: bool,
+    snr: f32,
+}
+
+#[derive(Serialize)]
+pub struct Sample {
+    /// Cosa ha capito Whisper.
+    text: String,
+    /// Il KWS l'ha presa come «Hey Jev».
+    wake: bool,
+    /// Picco della voce rispetto al rumore di fondo.
+    snr: f32,
 }
 
 #[tauri::command]
@@ -50,11 +73,13 @@ pub fn start_wake_listener(
     enabled.store(true, Ordering::Release);
     let started = Arc::clone(&controller.started);
     let end_session = Arc::clone(&controller.end_session);
+    let capture = Arc::clone(&controller.capture);
     let app_for_worker = app.clone();
     if let Err(error) = thread::Builder::new()
         .name("heyjev-wake-word".into())
         .spawn(move || {
-            let result = listen_for_keyword(kws, enabled, end_session, app_for_worker.clone());
+            let result =
+                listen_for_keyword(kws, enabled, end_session, capture, app_for_worker.clone());
             started.store(false, Ordering::Release);
             if let Err(error) = result {
                 let _ = app_for_worker.emit("app:wake-error", error);
@@ -77,6 +102,53 @@ pub fn set_wake_enabled(active: bool, controller: State<'_, WakeController>) {
 #[tauri::command]
 pub fn end_session(controller: State<'_, WakeController>) {
     controller.end_session.store(true, Ordering::Release);
+}
+
+/// Tutorial: registra la prossima frase, dice se il KWS l'ha presa come «Hey Jev» e cosa
+/// sente Whisper. `wake`: frase di attivazione, trascritta come la trascrive la riserva.
+#[tauri::command]
+pub async fn record_sample(
+    app: AppHandle,
+    controller: State<'_, WakeController>,
+    wake: bool,
+) -> Result<Sample, String> {
+    let (sender, receiver) = channel();
+    *controller
+        .capture
+        .lock()
+        .map_err(|_| "Microfono non disponibile.".to_string())? = Some(sender);
+    let captured = tauri::async_runtime::spawn_blocking(move || {
+        receiver.recv_timeout(Duration::from_secs(12))
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let Ok(Capture {
+        samples,
+        rate,
+        wake: heard_wake,
+        snr,
+    }) = captured
+    else {
+        if let Ok(mut pending) = controller.capture.lock() {
+            pending.take();
+        }
+        return Err("Non ho sentito niente: riprova.".into());
+    };
+    let prompt = if wake {
+        crate::WAKE_PROMPT
+    } else {
+        crate::WHISPER_PROMPT
+    };
+    let text = tauri::async_runtime::spawn_blocking(move || {
+        crate::transcribe(&app, &samples, rate, prompt)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    Ok(Sample {
+        text,
+        wake: heard_wake,
+        snr,
+    })
 }
 
 fn create_keyword_spotter(app: &AppHandle) -> Result<KeywordSpotter, String> {
@@ -120,6 +192,7 @@ fn listen_for_keyword(
     kws: KeywordSpotter,
     enabled: Arc<AtomicBool>,
     end_session: Arc<AtomicBool>,
+    capture: Arc<Mutex<Option<Sender<Capture>>>>,
     app: AppHandle,
 ) -> Result<(), String> {
     let host = cpal::default_host();
@@ -154,6 +227,7 @@ fn listen_for_keyword(
         enabled,
         failed,
         end_session,
+        capture,
         app,
     )
 }
@@ -247,6 +321,13 @@ const SEGMENT_MAX_SECS: f32 = 8.0;
 const MIN_SPEECH_SECS: f32 = 0.2; // sotto: tosse/rumore, non va a Whisper
 const PREROLL_SECS: f32 = 0.3; // audio prima del parlato, per non tagliare l'attacco
 const FIRST_COMMAND_WAIT_SECS: f32 = 4.0;
+/// Tutorial: sensibilità fissa (quella dell'utente è ciò che si sta calibrando) e attesa.
+const CAPTURE_VAD_RATIO: f32 = 2.4;
+const CAPTURE_WAIT_SECS: f32 = 6.0;
+const KWS_LAG: Duration = Duration::from_millis(1200);
+/// Riserva Whisper: solo frasi brevi, le chiacchiere lunghe non sono una chiamata.
+const FALLBACK_MAX_SECS: f32 = 3.5;
+
 
 impl Session {
     fn new() -> Self {
@@ -317,6 +398,68 @@ impl Session {
     }
 }
 
+/// Sessione di ascolto dopo «Hey Jev».
+struct Active {
+    vad: Session,
+    threshold: f32,
+    idle_secs: f32,
+    /// Deepgram in streaming; `None` o caduto = frasi a Whisper locale.
+    listener: Option<crate::deepgram::Listener>,
+}
+
+/// Registrazione in corso per il tutorial.
+struct Capturing {
+    vad: Session,
+    threshold: f32,
+    wake: bool,
+    peak: f32,
+    reply: Sender<Capture>,
+    /// Frase finita (e quando): si aspetta ancora il KWS.
+    done: Option<(Vec<f32>, Instant)>,
+}
+
+/// AGC + KWS su un blocco audio; restituisce la keyword se scatta (e riazzera lo stream).
+fn feed_kws(
+    kws: &KeywordSpotter,
+    stream: &OnlineStream,
+    sample_rate: i32,
+    samples: &[f32],
+    rms: f32,
+    noise: f32,
+    envelope: &mut f32,
+) -> Option<String> {
+    // Il modello perde la wake word se la voce arriva bassa (misurato). Inviluppo a salita
+    // istantanea e discesa lenta; guadagno 1..10 ma senza portare il rumore di fondo oltre
+    // ~0,005 (una stanza rumorosa amplificata lo confonde).
+    *envelope = rms.max(*envelope * 0.997).max(1e-4);
+    let max_gain = (0.005 / noise).clamp(1.0, 10.0);
+    let gain = (0.1 / *envelope).clamp(1.0, max_gain);
+    let boosted: Vec<f32> = samples.iter().map(|s| s * gain).collect();
+    stream.accept_waveform(sample_rate, &boosted);
+    while kws.is_ready(stream) {
+        kws.decode(stream);
+        if let Some(result) = kws.get_result(stream) {
+            if !result.keyword.trim().is_empty() {
+                kws.reset(stream);
+                return Some(result.keyword);
+            }
+        }
+    }
+    None
+}
+
+/// Riserva: la frase comincia come l'utente dice «Hey Jev» (imparato nel tutorial)?
+/// Restituisce il resto, cioè un comando detto di seguito.
+fn wake_match(text: &str, aliases: &[String]) -> Option<String> {
+    let heard = crate::words(text);
+    aliases
+        .iter()
+        .map(|alias| crate::words(alias))
+        .find(|alias| !alias.is_empty() && heard.starts_with(alias))
+        .map(|alias| heard[alias.len()..].join(" "))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn process_audio(
     receiver: Receiver<Vec<f32>>,
     kws: KeywordSpotter,
@@ -324,6 +467,7 @@ fn process_audio(
     enabled: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
     end_requested: Arc<AtomicBool>,
+    capture: Arc<Mutex<Option<Sender<Capture>>>>,
     app: AppHandle,
 ) -> Result<(), String> {
     let stream = kws.create_stream();
@@ -338,7 +482,9 @@ fn process_audio(
             .name("heyjev-whisper".into())
             .spawn(move || {
                 for segment in segment_receiver {
-                    let _ = match crate::transcribe(&app, &segment, sample_rate as u32) {
+                    let heard =
+                        crate::transcribe(&app, &segment, sample_rate as u32, crate::WHISPER_PROMPT);
+                    let _ = match heard {
                         Ok(text) => app.emit("app:transcript", text),
                         Err(error) => app.emit("app:transcript-error", error),
                     };
@@ -348,10 +494,20 @@ fn process_audio(
             .map_err(|error| format!("Avvio del worker Whisper fallito: {error}"))?;
     }
 
+    // Riserva Whisper per chi il KWS non riconosce bene (attiva se il tutorial ha
+    // imparato `wake_aliases`): frasi brevi → Whisper → confronto con gli alias.
+    let checking = Arc::new(AtomicBool::new(false));
+    let (hits, hit_receiver) = channel::<(u64, String)>();
+    let mut generation = 0_u64; // cambia a ogni sessione: scarta i risultati arrivati tardi
+    let mut fallback: Option<(Session, f32)> = None;
+    let mut aliases: Vec<String> = Vec::new();
+    let mut vad_ratio = 2.4_f32;
+    let mut settings_read: Option<Instant> = None;
+
     let mut noise = 0.01_f32;
     let mut envelope = 0.01_f32;
-    // (stato, soglia parlato, secondi di silenzio per chiudere)
-    let mut session: Option<(Session, f32, f32)> = None;
+    let mut session: Option<Active> = None;
+    let mut capturing: Option<Capturing> = None;
     let mut last_level = Instant::now();
     let mut was_enabled = true;
     loop {
@@ -367,25 +523,104 @@ fn process_audio(
         };
         let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
 
-        if let Some((active, threshold, idle_secs)) = session.as_mut() {
+        if let Some(active) = session.as_mut() {
+            let speaking = speaker::speaking();
             if last_level.elapsed() >= Duration::from_millis(40) {
                 last_level = Instant::now();
-                let _ = app.emit("app:level", (rms / (*threshold * 4.0)).min(1.0));
+                // Onda del notch: la voce di HeyJev mentre parla, il microfono mentre ascolta.
+                let level = if speaking {
+                    speaker::level()
+                } else {
+                    (rms / (active.threshold * 4.0)).min(1.0)
+                };
+                let _ = app.emit("app:level", level);
             }
-            // Il silenzio si conta da quando il risultato è pronto, non durante Whisper.
-            if pending.load(Ordering::Acquire) > 0 {
-                active.idle = 0;
+            // A Deepgram va sempre il microfono: anche mentre Maia parla, così la si può
+            // interrompere. L'eco della sua voce la riconosce deepgram.rs dal contenuto
+            // (il volume non basta: il microfono del portatile la sente forte).
+            let streaming = active.listener.as_ref().is_some_and(|l| !l.failed());
+            if let Some(listener) = active.listener.as_ref().filter(|_| streaming) {
+                listener.send(&samples, sample_rate as u32);
             }
-            let step = active.push(&samples, rms, *threshold, *idle_secs, rate);
+            // Il silenzio si conta da quando la risposta è finita, non mentre arriva.
+            if pending.load(Ordering::Acquire) > 0
+                || speaking
+                || crate::chat::busy()
+                || active.listener.as_ref().is_some_and(|l| l.pending())
+            {
+                active.vad.idle = 0;
+            }
+            let step = active
+                .vad
+                .push(&samples, rms, active.threshold, active.idle_secs, rate);
             if let Step::Segment(segment) = step {
-                pending.fetch_add(1, Ordering::AcqRel);
-                let _ = app.emit("app:segment", ());
-                let _ = segments.send(segment);
-            } else if end_requested.swap(false, Ordering::AcqRel)
+                // Senza Deepgram (o se è caduto) le frasi vanno a Whisper; l'eco mai.
+                if !streaming && !speaker::echo_window() {
+                    pending.fetch_add(1, Ordering::AcqRel);
+                    let _ = app.emit("app:segment", ());
+                    let _ = segments.send(segment);
+                }
+            } else if (!speaking && end_requested.swap(false, Ordering::AcqRel))
                 || (matches!(step, Step::End) && pending.load(Ordering::Acquire) == 0)
             {
-                session = None;
+                session = None; // chiude anche lo stream Deepgram
                 let _ = app.emit("app:session-end", ());
+            }
+            continue;
+        }
+
+        // Tutorial: registra una frase; il KWS resta acceso per dire se l'avrebbe presa.
+        if capturing.is_none() {
+            if let Some(reply) = capture.lock().ok().and_then(|mut pending| pending.take()) {
+                kws.reset(&stream);
+                capturing = Some(Capturing {
+                    vad: Session::new(),
+                    threshold: noise * CAPTURE_VAD_RATIO,
+                    wake: false,
+                    peak: 0.0,
+                    reply,
+                    done: None,
+                });
+            }
+        }
+        if let Some(active) = capturing.as_mut() {
+            if last_level.elapsed() >= Duration::from_millis(40) {
+                last_level = Instant::now();
+                let _ = app.emit("app:level", (rms / (active.threshold * 4.0)).min(1.0));
+            }
+            if feed_kws(&kws, &stream, sample_rate, &samples, rms, noise, &mut envelope).is_some()
+            {
+                active.wake = true;
+            }
+            // Il KWS scatta fino a ~1 s dopo la fine della frase: si risponde dopo.
+            if let Some((_, ended)) = &active.done {
+                if active.wake || ended.elapsed() >= KWS_LAG {
+                    if let Some(Capturing {
+                        done: Some((segment, _)),
+                        wake,
+                        peak,
+                        reply,
+                        ..
+                    }) = capturing.take()
+                    {
+                        let _ = reply.send(Capture {
+                            samples: segment,
+                            rate: sample_rate as u32,
+                            wake,
+                            snr: peak / noise,
+                        });
+                    }
+                }
+                continue;
+            }
+            active.peak = active.peak.max(rms);
+            match active
+                .vad
+                .push(&samples, rms, active.threshold, CAPTURE_WAIT_SECS, rate)
+            {
+                Step::Segment(segment) => active.done = Some((segment, Instant::now())),
+                Step::End => capturing = None, // silenzio: il comando risponde "non ho sentito"
+                Step::Listen => {}
             }
             continue;
         }
@@ -397,38 +632,85 @@ fn process_audio(
         if !enabled.load(Ordering::Acquire) {
             if was_enabled {
                 kws.reset(&stream);
+                fallback = None;
+                generation += 1;
                 was_enabled = false;
             }
             continue;
         }
         was_enabled = true;
 
-        // AGC per il KWS: il modello perde la wake word se la voce arriva bassa (misurato).
-        // Inviluppo a salita istantanea e discesa lenta; guadagno 1..10 ma senza portare
-        // il rumore di fondo oltre ~0,005 (una stanza rumorosa amplificata lo confonde).
-        envelope = rms.max(envelope * 0.997).max(1e-4);
-        let max_gain = (0.005 / noise).clamp(1.0, 10.0);
-        let gain = (0.1 / envelope).clamp(1.0, max_gain);
-        let boosted: Vec<f32> = samples.iter().map(|s| s * gain).collect();
-        stream.accept_waveform(sample_rate, &boosted);
-        while kws.is_ready(&stream) {
-            kws.decode(&stream);
-            let Some(result) = kws.get_result(&stream) else {
-                continue;
-            };
-            if !result.keyword.trim().is_empty() {
-                enabled.store(false, Ordering::Release);
-                end_requested.store(false, Ordering::Release);
-                crate::remember_foreground_window();
-                kws.reset(&stream);
-                let settings = crate::current_settings(&app);
-                session = Some((
-                    Session::new(),
-                    noise * settings.vad_ratio(),
-                    settings.idle_seconds,
-                ));
-                let _ = app.emit("app:wake-word", result.keyword);
-                break;
+        let mut woke = feed_kws(&kws, &stream, sample_rate, &samples, rms, noise, &mut envelope)
+            .map(|keyword| (keyword, String::new()));
+
+        if settings_read.is_none_or(|read| read.elapsed() >= Duration::from_secs(5)) {
+            let settings = crate::current_settings(&app);
+            aliases = settings.wake_aliases.clone();
+            vad_ratio = settings.vad_ratio();
+            settings_read = Some(Instant::now());
+        }
+        if !aliases.is_empty() && woke.is_none() {
+            let (vad, threshold) =
+                fallback.get_or_insert_with(|| (Session::new(), noise * vad_ratio));
+            match vad.push(&samples, rms, *threshold, 5.0, rate) {
+                Step::Segment(segment)
+                    if segment.len() as f32 <= FALLBACK_MAX_SECS * rate
+                        && !checking.swap(true, Ordering::AcqRel) =>
+                {
+                    let (app, aliases, hits, checking) = (
+                        app.clone(),
+                        aliases.clone(),
+                        hits.clone(),
+                        Arc::clone(&checking),
+                    );
+                    let tag = generation;
+                    thread::spawn(move || {
+                        if let Ok(text) = crate::transcribe(
+                            &app,
+                            &segment,
+                            sample_rate as u32,
+                            crate::WAKE_PROMPT,
+                        ) {
+                            if let Some(rest) = wake_match(&text, &aliases) {
+                                let _ = hits.send((tag, rest));
+                            }
+                        }
+                        checking.store(false, Ordering::Release);
+                    });
+                }
+                Step::End => fallback = None, // soglia ricalcolata sul rumore attuale
+                _ => {}
+            }
+        }
+        while let Ok((tag, rest)) = hit_receiver.try_recv() {
+            if tag == generation && woke.is_none() {
+                woke = Some(("whisper".into(), rest));
+            }
+        }
+
+        if let Some((keyword, rest)) = woke {
+            enabled.store(false, Ordering::Release);
+            end_requested.store(false, Ordering::Release);
+            crate::remember_foreground_window();
+            kws.reset(&stream);
+            fallback = None;
+            generation += 1;
+            let settings = crate::current_settings(&app);
+            let listener = (settings.recognition == "deepgram")
+                .then(crate::deepgram::key)
+                .flatten()
+                .map(|key| crate::deepgram::Listener::start(&app, key, crate::apps::cached()));
+            crate::chat::reset();
+            session = Some(Active {
+                vad: Session::new(),
+                threshold: noise * settings.vad_ratio(),
+                idle_secs: settings.idle_seconds,
+                listener,
+            });
+            let _ = app.emit("app:wake-word", keyword);
+            // «Hey Jev apri il terminale» tutto d'un fiato: il comando è già nella frase.
+            if !rest.is_empty() {
+                let _ = app.emit("app:transcript", rest);
             }
         }
     }
@@ -436,7 +718,7 @@ fn process_audio(
 
 #[cfg(test)]
 mod tests {
-    use super::{Session, Step};
+    use super::{wake_match, Session, Step};
 
     fn step(session: &mut Session, loud: bool) -> Step {
         let block = [0.0_f32; 100]; // 0,1 s a 1 kHz
@@ -470,5 +752,19 @@ mod tests {
                                                                                     // La tosse non riazzera l'attesa: 4 s dall'inizio, non dalla tosse.
         assert!((0..33).all(|_| matches!(step(&mut session, false), Step::Listen)));
         assert!(matches!(step(&mut session, false), Step::End));
+    }
+
+    #[test]
+    fn fallback_matches_learned_wake_phrase() {
+        let aliases = vec!["Ehi, Jeff.".to_string(), "hey jev".to_string()];
+        assert_eq!(wake_match("Ehi Jeff!", &aliases).as_deref(), Some(""));
+        assert_eq!(
+            wake_match("Ehi, Jeff, apri il terminale.", &aliases).as_deref(),
+            Some("apri il terminale")
+        );
+        assert_eq!(wake_match("Hey Jev.", &aliases).as_deref(), Some(""));
+        assert_eq!(wake_match("Ehi, come stai?", &aliases), None);
+        assert_eq!(wake_match("Jeff ha chiamato", &aliases), None);
+        assert_eq!(wake_match("[Musica]", &["musica".to_string()]), None);
     }
 }

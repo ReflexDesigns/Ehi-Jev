@@ -2,19 +2,19 @@
 //! DeepSeek Flash genera progetti (in `%USERPROFILE%\<nome>`).
 
 use std::{
-    env, fs,
+    fs,
     path::{Component, Path, PathBuf},
     time::Duration,
 };
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_notification::NotificationExt;
 
 // Alias "latest" di OpenRouter: puntano sempre all'ultima versione Flash.
 const DOC_MODEL: &str = "~google/gemini-flash-latest";
 const CODE_MODEL: &str = "~deepseek/deepseek-flash-latest";
 const OPENROUTER: &str = "https://openrouter.ai/api/v1";
-const KEY_SERVICE: &str = "com.heyjev.app";
 const KEY_ACCOUNT: &str = "openrouter-api-key";
 const MAX_FILES: usize = 200;
 const MAX_BYTES: usize = 5_000_000;
@@ -23,21 +23,10 @@ const DOC_PROMPT: &str = "Sei lo scrittore di HeyJev. Scrivi il documento che l'
 
 const CODE_PROMPT: &str = "Sei lo sviluppatore di HeyJev. Crea il progetto che l'utente chiede (sito, MVP, app, prototipo): completo, funzionante e curato nel design. Preferisci lo stack più semplice che basta: un sito statico HTML/CSS/JS senza build step se possibile (index.html nella radice). Includi un README.md con cosa fa e come avviarlo. La richiesta è dettata a voce: ignora esitazioni, saluti ed errori di trascrizione. Niente file binari. Rispondi SOLO con JSON: {\"name\": \"nome-progetto-kebab-case\", \"files\": [{\"path\": \"percorso/relativo.ext\", \"content\": \"...\"}]}.";
 
-fn key_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEY_SERVICE, KEY_ACCOUNT)
-        .map_err(|_| "Windows Credential Manager non è disponibile.".to_string())
-}
-
-fn api_key() -> Result<String, String> {
-    key_entry()
-        .and_then(|entry| entry.get_password().map_err(|error| error.to_string()))
-        .or_else(|_| env::var("OPENROUTER_API_KEY"))
-        .map(|key| key.trim().to_string())
-        .ok()
-        .filter(|key| !key.is_empty() && !key.starts_with("your_"))
-        .ok_or_else(|| {
-            "Chiave OpenRouter non configurata: Impostazioni → Chiave OpenRouter.".into()
-        })
+pub(crate) fn api_key() -> Result<String, String> {
+    crate::secret(KEY_ACCOUNT, &["OPENROUTER_API_KEY"]).ok_or_else(|| {
+        "Chiave OpenRouter non configurata: Impostazioni → Chiave OpenRouter.".into()
+    })
 }
 
 #[tauri::command]
@@ -49,9 +38,7 @@ pub fn ai_key_configured() -> bool {
 #[tauri::command]
 pub async fn set_ai_key(key: String) -> Result<(), String> {
     let key = key.trim().to_string();
-    if key.len() < 20 || key.len() > 512 || key.chars().any(char::is_whitespace) {
-        return Err("Chiave OpenRouter non valida.".into());
-    }
+    crate::check_key_shape(&key)?;
     let response = client(15)?
         .get(format!("{OPENROUTER}/key"))
         .bearer_auth(&key)
@@ -61,9 +48,7 @@ pub async fn set_ai_key(key: String) -> Result<(), String> {
     if !response.status().is_success() {
         return Err("OpenRouter ha rifiutato la chiave.".into());
     }
-    key_entry()?
-        .set_password(&key)
-        .map_err(|_| "Windows non ha salvato la chiave nel Credential Manager.".into())
+    crate::store_secret(KEY_ACCOUNT, &key)
 }
 
 fn client(timeout: u64) -> Result<reqwest::Client, String> {
@@ -75,7 +60,14 @@ fn client(timeout: u64) -> Result<reqwest::Client, String> {
 }
 
 /// Una chiamata chat a OpenRouter che deve restituire un oggetto JSON.
-async fn complete(model: &str, system: &str, request: &str, timeout: u64) -> Result<Value, String> {
+/// `reasoning`: parametro OpenRouter; per ascoltare si spegne il ragionamento (latenza).
+async fn complete(
+    model: &str,
+    system: &str,
+    user: Value,
+    timeout: u64,
+    reasoning: Value,
+) -> Result<Value, String> {
     let response = client(timeout)?
         .post(format!("{OPENROUTER}/chat/completions"))
         .bearer_auth(api_key()?)
@@ -84,13 +76,18 @@ async fn complete(model: &str, system: &str, request: &str, timeout: u64) -> Res
             "model": model,
             "messages": [
                 { "role": "system", "content": system },
-                { "role": "user", "content": request }
+                { "role": "user", "content": user }
             ],
-            "response_format": { "type": "json_object" }
+            "response_format": { "type": "json_object" },
+            "reasoning": reasoning
         }))
         .send()
         .await
-        .map_err(|error| format!("OpenRouter non ha risposto: {error}"))?;
+        .map_err(|error| {
+            // Il Display di reqwest non dice il perché (timeout, TLS…): lo dice la causa.
+            let cause = std::error::Error::source(&error).map(|cause| format!(" ({cause})"));
+            format!("OpenRouter non ha risposto{}.", cause.unwrap_or_default())
+        })?;
     let status = response.status();
     let body: Value = response
         .json()
@@ -170,15 +167,28 @@ fn project_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
     Ok(root.join(path))
 }
 
+/// Crea il documento/progetto; a lavoro finito (anche in errore) notifica di Windows, se attiva.
 #[tauri::command]
 pub async fn ai_create(app: AppHandle, kind: String, request: String) -> Result<String, String> {
+    let result = create(&app, &kind, &request).await;
+    if crate::current_settings(&app).notifications {
+        let body = match &result {
+            Ok(message) => message.clone(),
+            Err(error) => format!("Errore AI: {error}"),
+        };
+        let _ = app.notification().builder().title("HeyJev").body(body).show();
+    }
+    result
+}
+
+async fn create(app: &AppHandle, kind: &str, request: &str) -> Result<String, String> {
     let request = request.trim();
     if request.is_empty() || request.len() > 4_000 {
         return Err("Richiesta vuota o troppo lunga.".into());
     }
-    match kind.as_str() {
+    match kind {
         "create_document" => {
-            let answer = complete(DOC_MODEL, DOC_PROMPT, request, 180).await?;
+            let answer = complete(DOC_MODEL, DOC_PROMPT, json!(request), 180, json!({})).await?;
             let content = answer["content"]
                 .as_str()
                 .filter(|text| !text.trim().is_empty())
@@ -203,7 +213,7 @@ pub async fn ai_create(app: AppHandle, kind: String, request: String) -> Result<
             ))
         }
         "create_project" => {
-            let answer = complete(CODE_MODEL, CODE_PROMPT, request, 600).await?;
+            let answer = complete(CODE_MODEL, CODE_PROMPT, json!(request), 600, json!({})).await?;
             let files = answer["files"]
                 .as_array()
                 .filter(|files| !files.is_empty() && files.len() <= MAX_FILES)
@@ -245,6 +255,43 @@ fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod model_speed {
+    use serde_json::json;
+    use std::time::Instant;
+
+    /// Latenza dei Gemini Flash su OpenRouter per una risposta breve da leggere ad alta voce
+    /// (usa la chiave dell'app). cargo test model_speed -- --ignored --nocapture
+    #[test]
+    #[ignore = "rete + chiave OpenRouter"]
+    fn model_speed() {
+        let models = std::env::var("HEYJEV_MODELS").expect("HEYJEV_MODELS=a,b,c");
+        let system = "Sei Jev, assistente vocale. Rispondi SOLO con JSON {\"reply\": \"...\"}: una o due frasi brevi in italiano.";
+        for model in models.split(',') {
+            for reasoning in [json!({ "enabled": false }), json!({ "effort": "minimal" })] {
+                let mut times = Vec::new();
+                let mut last = String::new();
+                for question in ["Che differenza c'è tra RAM e SSD?", "Dammi un consiglio per concentrarmi.", "Quanto fa 17 per 23?"] {
+                    let start = Instant::now();
+                    match tauri::async_runtime::block_on(super::complete(model, system, json!(question), 20, reasoning.clone())) {
+                        Ok(answer) => {
+                            times.push(start.elapsed().as_millis());
+                            last = answer["reply"].as_str().unwrap_or("").chars().take(90).collect();
+                        }
+                        Err(error) => last = format!("ERR {}", error.chars().take(90).collect::<String>()),
+                    }
+                }
+                if last.contains("mandatory") {
+                    continue;
+                }
+                times.sort();
+                println!("SPEED {model} reasoning={reasoning} ms={times:?} | {last}");
+                break;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

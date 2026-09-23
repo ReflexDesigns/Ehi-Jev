@@ -58,17 +58,7 @@ export function parseIntent(transcript: string): Promise<IntentResult> {
   return invoke<IntentResult>('parse_intent', { transcript });
 }
 
-/** Salva un PAT verificato nel Credential Manager, mai nel localStorage. */
-export function setUpdateToken(token: string): Promise<void> {
-  return invoke<void>('set_update_token', { token });
-}
-
-/** Importa GH_TOKEN/GITHUB_TOKEN dall'ambiente senza esporre il valore alla UI. */
-export function importUpdateTokenFromEnv(): Promise<void> {
-  return invoke<void>('import_update_token_from_env');
-}
-
-/** Controlla le release private usando il token salvato localmente. */
+/** Controlla l'ultima release pubblica firmata su GitHub. */
 export function checkForUpdate(): Promise<UpdateSummary | null> {
   return invoke<UpdateSummary | null>('check_for_update');
 }
@@ -90,6 +80,16 @@ export interface Settings {
   micSensitivity: number;
   /** Secondi di silenzio prima che HeyJev smetta di ascoltare. */
   idleSeconds: number;
+  /** Notifica di Windows quando un documento/progetto AI è pronto. */
+  notifications: boolean;
+  /** Chi ascolta i comandi: Deepgram in streaming (online, con la chiave) o Whisper sul PC. */
+  recognition: 'deepgram' | 'local';
+  /** Tutorial voce fatto (al primo avvio parte da solo). */
+  voiceTrained: boolean;
+  /** Come Whisper sente la «Hey Jev» dell'utente: riconoscimento di riserva. */
+  wakeAliases: string[];
+  /** Correzioni imparate nel tutorial: [sentito, voluto]. */
+  corrections: [string, string][];
 }
 
 export function getSettings(): Promise<Settings> {
@@ -112,4 +112,63 @@ export function aiKeyConfigured(): Promise<boolean> {
 /** Verifica la chiave OpenRouter e la salva nel Credential Manager. */
 export function saveAiKey(key: string): Promise<void> {
   return invoke<void>('set_ai_key', { key });
+}
+
+export function jevKeyConfigured(): Promise<boolean> {
+  return invoke<boolean>('jev_key_configured');
+}
+
+/** Verifica la chiave Jev con una frase di prova e la salva nel Credential Manager. */
+export function saveJevKey(key: string): Promise<void> {
+  return invoke<void>('set_jev_key', { key });
+}
+
+export function deepgramKeyConfigured(): Promise<boolean> {
+  return invoke<boolean>('deepgram_key_configured');
+}
+
+/** Verifica la chiave Deepgram e la salva nel Credential Manager. */
+export function saveDeepgramKey(key: string): Promise<void> {
+  return invoke<void>('set_deepgram_key', { key });
+}
+
+/** Frase che il parser non riconosce: Gemini sceglie solo lo strumento (evento app:tool),
+ *  niente conversazione. Ritorna gli strumenti scelti. */
+export function interpret(text: string): Promise<string[]> {
+  return invoke<string[]>('interpret', { text });
+}
+
+/** Legge un testo con la voce Maia (solo se c'è la chiave Deepgram): errori e avvisi. */
+export function speak(text: string): Promise<void> {
+  return invoke<void>('speak_text', { text });
+}
+
+/** Strumento scelto da Gemini (evento app:tool). */
+export interface ToolCall {
+  name: string;
+  args: Record<string, string>;
+}
+
+/** Apre un'app del menu Start dal nome detto (anche un po' storpiato da Whisper). */
+export function openApp(name: string): Promise<string> {
+  return invoke<string>('open_app', { name });
+}
+
+/** Nomi delle app del menu Start. */
+export function listApps(): Promise<string[]> {
+  return invoke<string[]>('list_apps');
+}
+
+export interface VoiceSample {
+  /** Cosa ha capito Whisper. */
+  text: string;
+  /** Il rilevatore offline l'ha presa come «Hey Jev». */
+  wake: boolean;
+  /** Picco della voce rispetto al rumore di fondo. */
+  snr: number;
+}
+
+/** Tutorial: registra la prossima frase detta (wake = «Hey Jev», senza vocabolario comandi). */
+export function recordSample(wake: boolean): Promise<VoiceSample> {
+  return invoke<VoiceSample>('record_sample', { wake });
 }

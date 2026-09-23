@@ -1,108 +1,137 @@
-# HeyJev — assistente vocale per Windows
+# HeyJev
 
-HeyJev è un prototipo desktop Windows 10/11 di assistente a comandi vocali brevi. La wake word offline **“Hey Jev”** fa scendere dall’alto **The Notch** (stile Dynamic Island), un overlay con onda audio reattiva; a riposo resta nascosto sopra lo schermo. La trascrizione usa Whisper.cpp locale; Jev/TypeSafe può classificare il testo in una lista chiusa di azioni. Se l’API non è configurata, viene usato il parser regex locale.
+**L’assistente vocale per Windows che scende dal bordo dello schermo.**
+Dici «Hey Jev»: un’isola nera stile Dynamic Island cola giù dall’alto, ti ascolta ed esegue. Apre app, controlla Windows, scrive documenti e crea siti con l’AI. Niente chiacchiere: capisce quello che dici anche detto a modo tuo, lo fa subito, poi risale e sparisce.
 
-> Jev non è un agente con accesso arbitrario al PC: può eseguire soltanto gli intenti elencati qui sotto. Le frasi naturali e le parafrasi possono essere classificate dall’API, ma sempre verso questa lista consentita.
+*Voice command executor for Windows 10/11: say “Hey Jev” and give orders. Real-time Italian speech via Deepgram streaming, free phrasing mapped to actions by Gemini Flash, offline wake word. It executes, it doesn't chat.*
+
+<!-- Screenshot dell'isola in ascolto / impostazioni / tutorial: in arrivo. -->
+
+## Cosa sa fare
+
+| | |
+|---|---|
+| 🚀 **Apre qualsiasi app** | «Apri Spotify», «Apri Esplora file», «Apri PitStop»: cerca il nome tra le app del menu Start, anche se lo dici o lo trascrive in modo un po’ diverso. |
+| 🪟 **Controlla Windows** | Mostra il desktop, chiude la finestra attiva, apre il terminale, Claude o ChatGPT. |
+| 📝 **Scrive documenti** | «Crea un documento sulla storia di Roma» → Gemini Flash scrive un file Markdown in **Download** e lo apre. |
+| 🌐 **Crea siti e MVP** | «Preparami un sito per una pizzeria» → DeepSeek Flash genera il progetto completo in `C:\Users\<tu>\<nome-progetto>` e lo apre nel browser. |
+| 🎯 **Capisce come parli tu** | Deepgram trascrive in tempo reale; i comandi noti partono all’istante, le frasi libere («fammi partire Spotify», «apri il gestionale dell’officina») le traduce Gemini Flash nel comando giusto in meno di un secondo. |
+| 🤐 **Laconico** | Esegue e basta: non fa conversazione e non risponde a domande di cultura. Parla (voce Aura 2 **Maia**) solo per errori e avvisi, e se parli sopra si zittisce. |
+| 🔁 **Conversazione continua** | Una sola «Hey Jev», poi quanti comandi vuoi, anche nella stessa frase («apri il terminale e mostra il desktop»). «Grazie» chiude. |
+| 🎓 **Impara la tua voce** | Al primo avvio un tutorial di un minuto: dici «Hey Jev» e leggi qualche frase. HeyJev impara come ti sente. |
+| 🔔 **Ti avvisa** | Quando un documento o un sito è pronto arriva una notifica di Windows (disattivabile). |
+| 🔄 **Si aggiorna da solo** | Controlla le release firmate su GitHub e si installa con un clic. |
+
+## Privacy
+
+- La wake word «Hey Jev» è **sempre offline** (sherpa-onnx): finché non la dici, niente audio esce dal PC.
+- Dopo «Hey Jev», con la chiave Deepgram, l’audio della conversazione va a **Deepgram** per la trascrizione in tempo reale e il testo delle risposte torna come voce. Senza chiave (o scegliendo *Whisper, sul PC* nelle Impostazioni) la trascrizione resta locale con Whisper.cpp.
+- A **OpenRouter** va il testo delle frasi libere (Gemini) e delle richieste di documenti e siti; a Jev/TypeSafe solo se configuri la sua chiave facoltativa; a GitHub il controllo aggiornamenti.
+- Le chiavi API stanno nel **Credential Manager di Windows**: non nel codice, non nell’installer, non in file di testo.
+- HeyJev esegue solo le azioni elencate qui sotto: non è un agente con accesso libero al PC. I file generati dall’AI non possono uscire dalla cartella del progetto.
+
+## Installazione
+
+1. Scarica `HeyJev_<versione>_x64-setup.exe` dall’**[ultima release](https://github.com/ReflexDesigns/Ehi-Jev/releases/latest)**.
+2. Avvialo: si installa per il tuo utente, senza permessi di amministratore. Windows SmartScreen può avvisare che l’editore è sconosciuto (l’installer non ha una firma Authenticode): **Ulteriori informazioni → Esegui comunque**.
+3. Al primo avvio parte il **tutorial voce**.
+4. Clic sull’icona di HeyJev nella system tray → **Impostazioni**: incolla la chiave **Deepgram** (ascolto e voce) e la chiave **OpenRouter** (risposte, documenti, siti). Senza chiavi HeyJev funziona lo stesso, offline, con i soli comandi.
+
+Requisiti: Windows 10/11 x64, microfono, WebView2 (già presente su Windows 11).
 
 ## Comandi vocali
 
-Pronuncia **“Hey Jev”** una volta: HeyJev resta in ascolto ed esegue ogni frase appena fai una breve pausa, quindi puoi dare più comandi di fila (anche nella stessa frase: “apri terminale e mostra desktop”). Smette di ascoltare dopo qualche secondo di silenzio oppure quando dici **“grazie”**, **“ok”** o **“silenzio”**. Il rilevatore configurato usa la frase inglese `HEY JEV`; la pronuncia italiana “Ehi Jev” potrebbe essere rilevata, ma non è garantita dal modello KWS attuale.
+Dopo «Hey Jev» HeyJev resta in ascolto ed esegue ogni frase appena fai una pausa. Smette dopo qualche secondo di silenzio o quando dici **«grazie»**, **«ok»** o **«silenzio»**.
 
-| Cosa dire dopo la wake word | Varianti riconosciute dal parser locale | Azione |
+| Cosa dire | Varianti | Cosa succede |
 |---|---|---|
-| “Apri terminale” / “Open terminal” | “Avvia terminale”, “Launch terminal” | Avvia Windows Terminal (`wt.exe`), con ripiego su `cmd.exe` |
-| “Apri Claude” / “Open Claude” | “Launch Claude” | Apre `claude.ai` nel browser predefinito |
-| “Apri GPT” / “Open GPT” | “Apri ChatGPT”, “Open ChatGPT” | Apre `chatgpt.com` nel browser predefinito |
-| “Mostra desktop” / “Show desktop” | “Mostra scrivania” | Invia **Win + D** |
-| “Chiudi questo” / “Close this” | “Chiudi la finestra”, “Close the window” | Chiude (come **Alt + F4**) la finestra attiva quando hai detto “Hey Jev”; mai HeyJev né il desktop |
-| “Grazie” / “Silenzio” / “Ok” | “Basta”, “Stop”, “Annulla”, “Thank you” | Chiude la sessione di ascolto |
-| “Check the update” / “Controlla aggiornamenti” | “Check for updates”, “Verifica aggiornamenti” | Cerca una release privata firmata e mostra il pulsante di installazione; l’update parte solo dopo il clic |
-| “Crea un documento su …” | “Scrivimi un file di testo / una relazione / un articolo …” | Gemini Flash (OpenRouter) scrive il documento `.md` (o `.txt`) in **Download** e lo apre |
-| “Crea un sito / un MVP / un’app …” | “Preparami un progetto / una landing / un prototipo …” | DeepSeek Flash (OpenRouter) crea la cartella `C:\Users\<utente>\<nome-progetto>` con il progetto e la apre |
+| «Apri Spotify» | «Avvia…», «Lancia…», «Open…», «Apri l’app…» | Apre l’app del menu Start col nome più simile |
+| «Apri terminale» | «Open terminal» | Windows Terminal (o `cmd.exe`) |
+| «Apri Claude» / «Apri ChatGPT» | «Open Claude», «Apri GPT» | Il sito nel browser predefinito |
+| «Mostra desktop» | «Show desktop», «Mostra scrivania» | **Win + D** |
+| «Chiudi questo» | «Chiudi la finestra», «Close this» | Chiude la finestra che era attiva quando hai chiamato HeyJev (mai HeyJev né il desktop) |
+| «Crea un documento su …» | «Scrivimi un file / una relazione / un articolo…» | Documento `.md` (o `.txt`) in **Download** |
+| «Crea un sito / un MVP / un’app …» | «Preparami una landing / un prototipo…» | Progetto in `C:\Users\<tu>\<nome-progetto>` |
+| «Controlla aggiornamenti» | «Check for updates» | Cerca una nuova versione; si installa solo dopo il tuo clic |
+| «Grazie» / «Silenzio» | «Ok», «Basta», «Stop», «Thank you» | Chiude l’ascolto |
+| Qualsiasi altra frase | «Fammi vedere il desktop», «Metti su SmileSync» | Gemini la traduce nel comando giusto; se non è un comando (es. «che circonferenza ha la Terra?») non fa niente |
 
-**Richieste all’AI**: dopo “crea un documento/sito…” tutto quello che dici fino a **“grazie”** (o al silenzio) diventa la richiesta. Il lavoro gira in background e un avviso nell’isola dice quando è pronto. Serve una chiave OpenRouter: **Impostazioni → Chiave OpenRouter** (verificata e salvata nel Credential Manager di Windows) oppure `OPENROUTER_API_KEY` in `.env.local`. I percorsi dei file generati sono validati: il modello non può scrivere fuori dalla cartella del progetto.
+**Richieste all’AI**: dopo «crea un documento/sito…» tutto quello che dici fino a «grazie» (o al silenzio) diventa la richiesta. Il lavoro va avanti in background: l’isola e la notifica ti dicono quando è pronto.
 
-La lista è definita nel parser offline (`src/lib/commandParser.ts`) e nella classificazione Jev (`src-tauri/src/lib.rs`). Se la trascrizione non corrisponde a un intent consentito, HeyJev non esegue comandi di sistema generici.
+## Il tutorial voce
 
-## Architettura
+Ognuno dice «Hey Jev» a modo suo, e il rilevatore offline è addestrato sull’inglese. Il tutorial (al primo avvio, o **Impostazioni → Tutorial voce**) ti fa dire «Hey Jev» tre volte e leggere frasi in italiano e in inglese, tra cui i nomi di un paio delle tue app. HeyJev confronta quello che sente con quello che era scritto e impara:
 
-| Componente | Implementazione |
+- **come ti chiama**: se il rilevatore non ti riconosce sempre, attiva un ascolto di riserva che riconosce la tua «Hey Jev» così come la sente Whisper;
+- **le correzioni**: se per esempio sente «Smile Sink» quando dici «SmileSync», da lì in poi corregge da solo;
+- **il volume della tua voce**: regola la sensibilità del microfono.
+
+Tutto resta sul tuo PC, in `%APPDATA%\com.heyjev.app\settings.json`.
+
+## Impostazioni
+
+Clic sull’icona nella system tray (o tasto destro → **Impostazioni…**):
+
+- lingua dei comandi (italiano, inglese, automatica) e **chi ascolta**: Deepgram (online, consigliato) o Whisper sul PC (offline);
+- sensibilità del microfono e secondi di silenzio prima di smettere di ascoltare;
+- notifica di Windows a lavoro AI finito;
+- **Chiave Deepgram** ([console.deepgram.com](https://console.deepgram.com)): ascolto in streaming (nova-3, italiano) e voce Aura 2 Maia;
+- **Chiave OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/keys)): frasi libere → comando (Gemini 3.5 Flash-Lite), documenti (Gemini Flash) e siti (DeepSeek Flash). Si paga a consumo su OpenRouter;
+- **Chiave Jev** (facoltativa): classifica con Jev/TypeSafe le frasi libere che il riconoscimento locale non capisce;
+- tutorial voce e controllo aggiornamenti.
+
+Le chiavi vengono verificate prima del salvataggio.
+
+## Come funziona
+
+| Pezzo | Tecnologia |
 |---|---|
-| Desktop Windows | Tauri 2, Rust e React/TypeScript |
-| Wake word + registrazione comando | sherpa-onnx KWS in Rust + CPAL, offline; `HEY JEV` con varianti foniche (`scripts/setup-kws.ps1`). Dopo la wake word Rust registra il comando sullo stesso stream (fine a pausa, max 6 s): nessun permesso microfono nella WebView |
-| Speech-to-text | Whisper.cpp locale (tiny, greedy, ~0,6 s a frase) su un thread dedicato mentre si continua ad ascoltare; lingua dalle Impostazioni (italiano di default, capisce anche i comandi inglesi) |
-| Parsing | Regex locale istantanea (più comandi per frase); Jev/TypeSafe `SystemOne` come ripiego per frasi libere |
-| Automazioni Windows | Rust + `windows-sys`; `ShellExecuteW` e `SendInput` |
-| Overlay | WebView frameless/trasparente, always-on-top; onda Canvas 2D |
-| Installer | NSIS per utente corrente: installer Windows **`.exe`** |
+| App desktop | [Tauri 2](https://tauri.app): backend Rust, interfaccia React/TypeScript |
+| Wake word | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) keyword spotting, offline, in Rust + CPAL; riserva Whisper imparata nel tutorial |
+| Ascolto | [Deepgram](https://deepgram.com) nova-3 in streaming WebSocket (italiano, fine frase automatica, nomi delle app come parole chiave); senza chiave [whisper.cpp](https://github.com/ggml-org/whisper.cpp) locale |
+| Voce | Deepgram Aura 2 `aura-2-maia-it` via WebSocket, solo per errori e avvisi; si zittisce se parli (l’eco delle casse è riconosciuta dal contenuto) |
+| Comandi | Parser locale istantaneo e tollerante (`src/lib/commandParser.ts`); frasi libere a Gemini 3.5 Flash-Lite con strumento obbligatorio, ~0,7 s (`src-tauri/src/chat.rs`) |
+| App installate | `Get-StartApps` + ricerca tollerante del nome (`src-tauri/src/apps.rs`) |
+| AI | [OpenRouter](https://openrouter.ai): Gemini Flash per i documenti, DeepSeek Flash per i progetti |
+| L’isola | Finestra trasparente sempre in primo piano; animazioni solo CSS |
+| Installer e aggiornamenti | NSIS per utente + Tauri updater con firma obbligatoria |
 
-L’icona sorgente è `public/app-icon.svg`. `npm run icons` genera le icone Tauri per installer, finestra e tray; la tray usa la stessa icona predefinita dell’app.
+## Sviluppo
 
-## Requisiti
-
-- Windows 10/11 x64 e WebView2 Runtime.
-- Node.js 18+ e npm.
-- Rust stable con toolchain MSVC, Visual Studio C++ Build Tools e Windows SDK.
-- Python 3 per preparare i token del modello KWS durante sviluppo/build.
-- Connessione Internet al primo avvio in sviluppo/build per scaricare i modelli KWS e Whisper e il runtime whisper.cpp ufficiale.
-
-## Configurazione locale
-
-1. Crea `.env.local` copiando `.env.example` e inserisci la tua chiave API Jev/TypeSafe. `.env.local` è escluso da Git: **non committare né condividere le chiavi**.
-2. Il primo avvio di `npm run tauri:dev` o `npm run tauri:build` prepara automaticamente KWS e Whisper: scarica il modello inglese KWS e genera `keywords.txt`, poi scarica `whisper-cli.exe` e il modello Whisper tiny multilingue. Dopo installazione/setup, la trascrizione resta locale e funziona offline. Per eseguire manualmente i setup:
-
-   ```powershell
-   .\scripts\setup-kws.ps1
-   .\scripts\setup-whisper.ps1
-   ```
-
-3. Modelli e `whisper-cli.exe` vengono trovati nella cartella risorse dell’app (`target\<profilo>\models` in sviluppo, `models\` accanto a `heyjev.exe` una volta installata). `WHISPER_MODEL_PATH`, `WHISPER_CPP_BIN` e `WAKE_MODEL_DIR` servono solo come override. In sviluppo `.env.local` va nella radice del repo; nell’app installata in `%APPDATA%\com.heyjev.app\.env.local`.
-4. **Impostazioni**: clic sinistro sull’icona di HeyJev nella system tray, oppure tasto destro → **Impostazioni…**. Lingua dei comandi, sensibilità del microfono (alzala se devi parlare forte), secondi di silenzio prima che smetta di ascoltare, controllo aggiornamenti e token GitHub.
-5. Verifica l’accesso al microfono nelle impostazioni di Windows. Al primo avvio premi **Attiva** per avviare il rilevatore.
-
-## Avvio e installer
+Serve: Windows 10/11 x64, Node.js 18+, Rust stable (MSVC) con Visual Studio C++ Build Tools, Python 3 (prepara i token del modello KWS).
 
 ```powershell
 npm install
-npm run tauri:dev
+npm run tauri:dev     # al primo avvio scarica i modelli KWS e Whisper in models/
 ```
 
-Per creare l’installer NSIS `.exe` (configurato in `src-tauri/tauri.conf.json`):
+Le chiavi in sviluppo si possono mettere in `.env.local` (vedi `.env.example`, escluso da Git). Verifiche:
 
 ```powershell
-npm run tauri:build
+npm test                                          # parser comandi e tutorial voce
+npm run build                                     # TypeScript + Vite
+cargo test --manifest-path src-tauri\Cargo.toml   # backend Rust
 ```
 
-Il file si trova in `src-tauri/target/release/bundle/nsis/`. La build richiede toolchain Rust/MSVC, Python 3, connessione Internet al primo setup e WebView2. L'installer include il modello KWS, il runtime whisper.cpp Windows x64 e il modello Whisper multilingue tiny (circa 75 MiB): è più grande, ma chi lo installa non deve scaricare/configurare modelli e può trascrivere offline. I modelli restano esclusi da Git.
+`npm run tauri:build` crea l’installer in `src-tauri/target/release/bundle/nsis/`; include modelli e runtime Whisper (~75 MiB), così chi installa non deve configurare nulla.
 
-## Aggiornamenti
-
-“**Hey Jev, check the update**” controlla le release firmate nel repository privato. Se manca la credenziale, apri **Impostazioni** → **Token GitHub…**; inserisci il token oppure premi **Importa da .env.local**. Usa un fine-grained token limitato al solo `ReflexDesigns/Ehi-Jev` con **Contents: read**. HeyJev verifica l’accesso e conserva il token nel **Credential Manager di Windows**; non lo salva nel WebView, nel repository o nell’EXE.
-
-Quando trova una versione nuova, The Notch mostra **Installa <versione>**. L’installazione richiede quel clic esplicito e Windows chiude l’app mentre applica il pacchetto firmato. La verifica della firma Tauri è obbligatoria.
-
-La GitHub Action `.github/workflows/release.yml` compila e pubblica installer, firme e `latest.json` a ogni tag Git `v*`. Prima di spingere una nuova release, aggiorna i file versione con `node scripts/set-version.mjs X.Y.Z`, committa la modifica, quindi crea e spingi il tag corrispondente (`vX.Y.Z`). In GitHub Actions deve essere configurato il secret `TAURI_SIGNING_PRIVATE_KEY`; la chiave privata locale è esclusa da Git. **Il primo installer updater-enabled va installato manualmente**: un installer creato prima dell’integrazione dell’updater non può auto-aggiornarsi. Anche 0.2.2 e 0.2.3 (updater e percorsi modelli rotti) vanno sostituite installando la 0.2.4 a mano.
-
-## Struttura principale
+**Release**: `node scripts/set-version.mjs X.Y.Z`, commit, poi tag `vX.Y.Z`. La GitHub Action `.github/workflows/release.yml` compila, firma e pubblica installer e `latest.json` (serve il secret `TAURI_SIGNING_PRIVATE_KEY`).
 
 ```text
-src/                         UI React, overlay, wave, parser e registrazione microfono
-src-tauri/src/               backend Rust, wake listener, STT, intent e OS control
-src-tauri/tauri.conf.json    finestra, CSP, bundle NSIS e icone
-scripts/setup-kws.ps1        setup del modello KWS sherpa-onnx
-scripts/setup-whisper.ps1    setup whisper.cpp e modello STT multilingue
-scripts/set-version.mjs      sincronizza le versioni per una release taggata
-.github/workflows/release.yml build/publish automatico delle release firmate
-public/app-icon.svg          sorgente SVG icona
-models/                      modelli locali (esclusi da Git)
+src/                     interfaccia: isola, impostazioni, tutorial, parser comandi
+src-tauri/src/lib.rs     comandi Tauri, Whisper, azioni Windows, impostazioni, updater
+src-tauri/src/wake.rs    microfono, wake word, sessione di ascolto, barge-in, tutorial
+src-tauri/src/deepgram.rs ascolto in streaming e voce Aura 2 Maia
+src-tauri/src/speaker.rs  altoparlanti: coda audio che si svuota all'istante
+src-tauri/src/chat.rs     frase libera → strumento (Gemini)
+src-tauri/src/apps.rs    ricerca e avvio delle app installate
+src-tauri/src/ai.rs      documenti e progetti via OpenRouter
+scripts/                 setup modelli, versioni, test del parser
 ```
 
-## Verifiche
+## Limiti noti
 
-```powershell
-npm test
-npm run build
-cargo check --manifest-path src-tauri\Cargo.toml
-```
-
-Per il primo pacchetto locale, installer e firma updater vengono copiati in `release/` (cartella esclusa da Git).
+- Solo Windows 10/11 x64.
+- Senza Deepgram, Whisper tiny è pensato per comandi brevi: frasi lunghe e nomi rari possono uscire storpiati (il tutorial aiuta).
+- Mentre Maia parla, per zittirla servono almeno due parole diverse dalle sue, oppure «basta», «stop», «aspetta», «grazie».
+- L’installer non ha una firma Authenticode, quindi SmartScreen avvisa al primo download.

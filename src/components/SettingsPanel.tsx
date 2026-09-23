@@ -1,25 +1,41 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { aiKeyConfigured, getSettings, saveAiKey, saveSettings, type Settings } from '../lib/osControl';
+import {
+  aiKeyConfigured,
+  deepgramKeyConfigured,
+  getSettings,
+  jevKeyConfigured,
+  saveAiKey,
+  saveDeepgramKey,
+  saveJevKey,
+  saveSettings,
+  type Settings,
+} from '../lib/osControl';
 
 interface SettingsPanelProps {
   onClose: () => void;
   onCheckUpdate: () => void;
-  onConfigureToken: () => void;
+  onTutorial: () => void;
 }
 
 const SENSITIVITY = ['Bassa', 'Medio-bassa', 'Media', 'Alta', 'Molto alta'];
 
 /** Impostazioni (icona nella tray: clic, oppure tasto destro → Impostazioni…). */
-export default function SettingsPanel({ onClose, onCheckUpdate, onConfigureToken }: SettingsPanelProps) {
+export default function SettingsPanel({ onClose, onCheckUpdate, onTutorial }: SettingsPanelProps) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [aiKey, setAiKey] = useState('');
+  const [jevKey, setJevKey] = useState('');
+  const [deepgramKey, setDeepgramKey] = useState('');
+  const [deepgramReady, setDeepgramReady] = useState(false);
   const [aiReady, setAiReady] = useState(false);
+  const [jevReady, setJevReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     getSettings().then(setSettings, (e) => setError(String(e)));
     aiKeyConfigured().then(setAiReady, () => undefined);
+    jevKeyConfigured().then(setJevReady, () => undefined);
+    deepgramKeyConfigured().then(setDeepgramReady, () => undefined);
   }, []);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -28,6 +44,8 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onConfigureToken
     setSaving(true);
     try {
       if (aiKey.trim()) await saveAiKey(aiKey);
+      if (jevKey.trim()) await saveJevKey(jevKey);
+      if (deepgramKey.trim()) await saveDeepgramKey(deepgramKey);
       await saveSettings(settings);
       onClose();
     } catch (e) {
@@ -49,6 +67,16 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onConfigureToken
               <option value="it">Italiano</option>
               <option value="en">English</option>
               <option value="auto">Automatica</option>
+            </select>
+          </label>
+          <label className="settings-row">
+            <span>Chi ascolta i comandi</span>
+            <select
+              value={settings.recognition}
+              onChange={(e) => update({ recognition: e.target.value as Settings['recognition'] })}
+            >
+              <option value="deepgram">Deepgram, online (consigliato)</option>
+              <option value="local">Whisper, sul PC (offline)</option>
             </select>
           </label>
           <label className="settings-row">
@@ -78,6 +106,14 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onConfigureToken
             />
           </label>
           <label className="settings-row">
+            <span>Notifica quando un documento o sito è pronto</span>
+            <input
+              type="checkbox"
+              checked={settings.notifications}
+              onChange={(e) => update({ notifications: e.target.checked })}
+            />
+          </label>
+          <label className="settings-row">
             <span>Chiave OpenRouter</span>
             <input
               type="password"
@@ -88,6 +124,28 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onConfigureToken
               placeholder={aiReady ? 'Salvata ✓' : 'sk-or-…'}
             />
           </label>
+          <label className="settings-row">
+            <span>Chiave Deepgram (ascolto e voce)</span>
+            <input
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={deepgramKey}
+              onChange={(e) => setDeepgramKey(e.target.value)}
+              placeholder={deepgramReady ? 'Salvata ✓' : 'chiave API'}
+            />
+          </label>
+          <label className="settings-row">
+            <span>Chiave Jev (facoltativa)</span>
+            <input
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={jevKey}
+              onChange={(e) => setJevKey(e.target.value)}
+              placeholder={jevReady ? 'Salvata ✓' : 'per le frasi libere'}
+            />
+          </label>
         </>
       ) : null}
       {error ? <p className="settings-error">{error}</p> : null}
@@ -95,8 +153,8 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onConfigureToken
         <button type="button" className="pill-button secondary" onClick={onCheckUpdate}>
           Aggiornamenti
         </button>
-        <button type="button" className="pill-button secondary" onClick={onConfigureToken}>
-          Token GitHub
+        <button type="button" className="pill-button secondary" onClick={onTutorial}>
+          Tutorial voce
         </button>
         <button type="button" className="pill-button secondary" onClick={onClose}>
           Chiudi

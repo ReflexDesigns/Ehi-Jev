@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "HeyJev",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "identifier": "com.heyjev.app",
   "build": {
     "beforeDevCommand": "npm run setup:models && npm run dev",
@@ -15,11 +15,11 @@
         "label": "main",
         "title": "HeyJev",
         "width": 640,
-        "height": 380,
+        "height": 460,
         "minWidth": 640,
         "maxWidth": 640,
-        "minHeight": 380,
-        "maxHeight": 380,
+        "minHeight": 460,
+        "maxHeight": 460,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
@@ -67,6 +67,9 @@
   },
   "plugins": {
     "updater": {
+      "endpoints": [
+        "https://github.com/ReflexDesigns/Ehi-Jev/releases/latest/download/latest.json"
+      ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM4MDFEOUE2MjVGNjlFQjAKUldTd252WWxwdGtCT01pdEtCZVJlSFpjd3pFZTVkazR0d0Q5N3pFNTNPYjhxSmplSzRMbTdHd1AK",
       "windows": {
         "installMode": "passive"

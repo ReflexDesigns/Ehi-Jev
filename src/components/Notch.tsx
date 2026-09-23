@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import SoundWave from './SoundWave';
 import type { UpdateSummary } from '../lib/osControl';
 import type { AppState } from '../types';
@@ -7,17 +7,14 @@ interface NotchProps {
   state: AppState;
   status: string;
   getLevel?: () => number;
-  showTokenSetup?: boolean;
-  tokenBusy?: boolean;
+  /** Jev sta parlando: onda e testo della risposta. */
+  speaking?: boolean;
   updateAvailable?: UpdateSummary | null;
   /** Callback del pulsante mostrato nello stato "setup" (configura wake word). */
   onActivate?: () => void;
-  onSaveUpdateToken?: (token: string) => Promise<void>;
-  onImportUpdateToken?: () => Promise<void>;
-  onCancelTokenSetup?: () => void;
   onInstallUpdate?: () => void;
   onDismissUpdate?: () => void;
-  /** Pannello che espande l'isola (Impostazioni). */
+  /** Pannello che espande l'isola (Impostazioni, tutorial voce). */
   children?: ReactNode;
 }
 
@@ -29,29 +26,17 @@ export default function Notch({
   state,
   status,
   getLevel,
-  showTokenSetup = false,
-  tokenBusy = false,
+  speaking = false,
   updateAvailable = null,
   onActivate,
-  onSaveUpdateToken,
-  onImportUpdateToken,
-  onCancelTokenSetup,
   onInstallUpdate,
   onDismissUpdate,
   children,
 }: NotchProps) {
-  const [token, setToken] = useState('');
-  const expanded = showTokenSetup || Boolean(children) || Boolean(updateAvailable);
-
-  const submitToken = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!token.trim() || !onSaveUpdateToken) return;
-    await onSaveUpdateToken(token);
-    setToken('');
-  };
+  const expanded = Boolean(children) || Boolean(updateAvailable);
 
   return (
-    <div className={`notch notch-${state}${expanded ? ' notch-expanded' : ''}`}>
+    <div className={`notch notch-${state}${expanded ? ' notch-expanded' : ''}${speaking ? ' notch-speaking' : ''}`}>
       <div className="notch-row">
         <div className="notch-status">{status}</div>
         {state === 'setup' && !expanded && onActivate ? (
@@ -59,7 +44,7 @@ export default function Notch({
             Attiva
           </button>
         ) : (
-          <SoundWave state={state} getLevel={getLevel} />
+          <SoundWave state={state} getLevel={getLevel} speaking={speaking} />
         )}
       </div>
 
@@ -72,38 +57,6 @@ export default function Notch({
             Installa {updateAvailable.version}
           </button>
         </div>
-      ) : null}
-
-      {showTokenSetup ? (
-        <form className="notch-panel" onSubmit={(event) => void submitToken(event)}>
-          <p>
-            Token GitHub fine-grained con <code>Contents: read</code> solo su Ehi-Jev. Verrà verificato e
-            salvato nel Credential Manager di Windows, non nel browser né nell’EXE.
-          </p>
-          <input
-            className="wide"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            placeholder="github_pat_…"
-            aria-label="Token GitHub"
-          />
-          <div className="panel-actions">
-            {onImportUpdateToken ? (
-              <button type="button" className="pill-button secondary" disabled={tokenBusy} onClick={() => void onImportUpdateToken()}>
-                Importa da .env.local
-              </button>
-            ) : null}
-            <button type="button" className="pill-button secondary" disabled={tokenBusy} onClick={onCancelTokenSetup}>
-              Annulla
-            </button>
-            <button type="submit" className="pill-button" disabled={tokenBusy || !token.trim()}>
-              {tokenBusy ? 'Verifico…' : 'Salva'}
-            </button>
-          </div>
-        </form>
       ) : null}
 
       {children}
