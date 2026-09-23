@@ -43,6 +43,13 @@ const cases = {
   'Chiudi il blocco note, grazie.': ['close_app:blocco note', 'cancel'],
   'Apri Word e chiudi Excel.': ['open_app:word', 'close_app:excel'],
   'Chiudi questa finestra.': ['close_current'],
+  'Cerca ricette della carbonara su Google.': ['search:ricette della carbonara'],
+  'Cerca il meteo di domani, grazie.': ['search:il meteo di domani', 'cancel'],
+  'Cerca gli aggiornamenti.': ['check_update'],
+  'Scrivi Ciao Marco, ci vediamo domani alle 3.': ['type_text:Ciao Marco, ci vediamo domani alle 3.'],
+  'Scrivi apri il terminale.': ['type_text:apri il terminale.'],
+  'Scrivi Città di Roma, grazie.': ['type_text:Città di Roma', 'cancel'],
+  'Scrivi un documento sulla storia di Roma.': ['create_document'],
   // Parole storpiate da Whisper tiny (reali e dal confronto modelli).
   'Amnula.': ['cancel'],
   'Anula.': ['cancel'],

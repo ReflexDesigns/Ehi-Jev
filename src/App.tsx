@@ -25,6 +25,8 @@ import {
   setWakeEnabled,
   showWindow,
   speak,
+  typeText,
+  webSearch,
   startWakeListener,
   type Settings,
   type ToolCall,
@@ -50,6 +52,9 @@ import type { AppState } from './types';
 const WAKE_RETRY_MS = 5000; // riavvio del rilevatore dopo un errore microfono
 const LAST_RESULT_MS = 700; // l'ultimo esito resta visibile prima di chiudere
 const NOTICE_MS = 4000; // avviso a fine lavoro AI
+
+/** «… e premi invio» (come split_enter in lib.rs). */
+const ENTER = /(?:premi invio|e invia|dai invio|press enter)[\s.!,;]*$/i;
 
 type Panel = 'settings' | 'keys' | 'tutorial' | 'learned';
 const PANEL_TITLES: Record<Panel, string> = {
@@ -84,6 +89,7 @@ export default function App() {
   const draftRef = useRef<{ kind: string; text: string } | null>(null); // richiesta AI in dettatura
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   const correctionsRef = useRef<Correction[]>([]); // imparate nel tutorial voce
+  const typedRef = useRef(false); // nella sessione si è già scritto (senza Invio): serve lo spazio
 
   /** Le correzioni del tutorial sono errori tipici di Whisper: con Deepgram non servono
    *  (e "fa il" → "file" rovinerebbe "che tempo fa il weekend"). */
@@ -224,6 +230,17 @@ export default function App() {
         report(await closeApp(action.slice('close_app:'.length)));
         continue;
       }
+      if (action.startsWith('search:')) {
+        report(await webSearch(action.slice('search:'.length)));
+        continue;
+      }
+      if (action.startsWith('type_text:')) {
+        // «Scrivi …» di seguito: i pezzi si separano con uno spazio, tranne dopo un Invio.
+        const text = action.slice('type_text:'.length);
+        report(await typeText(typedRef.current ? ` ${text}` : text));
+        typedRef.current = !ENTER.test(text);
+        continue;
+      }
       if (action === 'check_update') {
         report(await checkUpdates());
         if (holdRef.current) return;
@@ -239,6 +256,8 @@ export default function App() {
       if (name in TOOL_ACTIONS) report(await executeAction(TOOL_ACTIONS[name]));
       else if (name === 'open_app') report(await openApp(args.name ?? ''));
       else if (name === 'close_app') report(await closeApp(args.name ?? ''));
+      else if (name === 'web_search') report(await webSearch(args.query ?? ''));
+      else if (name === 'type_text') report(await typeText(args.text ?? ''));
       else if (name === 'check_updates') report(await checkUpdates());
       else if (name === 'create_document' || name === 'create_website') {
         const kind = name === 'create_document' ? 'create_document' : 'create_project';
@@ -272,6 +291,7 @@ export default function App() {
     if (stateRef.current !== 'idle') return;
     sessionRef.current = true;
     draftRef.current = null;
+    typedRef.current = false;
     levelRef.current = 0;
     applyState('listening');
     setStatus('Ti ascolto…');

@@ -153,6 +153,16 @@ export function closeApp(name: string): Promise<string> {
   return invoke<string>('close_app', { name });
 }
 
+/** Ricerca Google nel browser predefinito. */
+export function webSearch(query: string): Promise<string> {
+  return invoke<string>('web_search', { query });
+}
+
+/** Digita il testo nella finestra che era in primo piano al «Hey Jev» (Invio solo se chiesto). */
+export function typeText(text: string): Promise<string> {
+  return invoke<string>('type_text', { text });
+}
+
 /** Nomi delle app del menu Start. */
 export function listApps(): Promise<string[]> {
   return invoke<string[]>('list_apps');

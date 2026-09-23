@@ -51,6 +51,8 @@ Dopo «Hey Jev» HeyJev resta in ascolto ed esegue ogni frase appena fai una pau
 | «Mostra desktop» | «Show desktop», «Mostra scrivania» | **Win + D** |
 | «Chiudi questo» | «Chiudi la finestra», «Close this» | Chiude la finestra che era attiva quando hai chiamato HeyJev (mai HeyJev né il desktop) |
 | «Chiudi Chrome» | «Chiudi Word», «Chiudi il blocco note» | Chiude le finestre aperte di quell’app, come Alt+F4 (i documenti non salvati te li chiede l’app) |
+| «Cerca … su Google» | «Cerca il meteo di domani», «Cercami su internet…» | Apre la ricerca Google nel browser |
+| «Scrivi …» | «Scrivi Ciao Marco, a domani e premi invio» | Digita il testo nella finestra che avevi davanti; Invio solo se lo chiedi |
 | «Crea un documento su …» | «Scrivimi un file / una relazione / un articolo…» | Documento `.md` (o `.txt`) in **Download** |
 | «Crea un sito / un MVP / un’app …» | «Preparami una landing / un prototipo…» | Progetto in `C:\Users\<tu>\<nome-progetto>` |
 | «Controlla aggiornamenti» | «Check for updates» | Cerca una nuova versione; si installa solo dopo il tuo clic |

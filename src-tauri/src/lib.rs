@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, PhysicalPosition, State, WindowEvent,
+    AppHandle, Emitter, Manager, PhysicalPosition, State, Url, WindowEvent,
 };
 use tauri_plugin_updater::{Update, UpdaterExt};
 use windows_sys::Win32::{
@@ -27,11 +27,13 @@ use windows_sys::Win32::{
     System::Threading::CreateMutexW,
     UI::{
         Input::KeyboardAndMouse::{
-            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_D, VK_LWIN,
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+            KEYEVENTF_UNICODE, VK_D, VK_LWIN, VK_RETURN,
         },
         Shell::ShellExecuteW,
         WindowsAndMessaging::{
-            GetClassNameW, GetForegroundWindow, PostMessageW, SC_CLOSE, SW_SHOWNORMAL,
+            GetClassNameW, GetForegroundWindow, PostMessageW, SetForegroundWindow, SC_CLOSE,
+            SW_SHOWNORMAL,
             WM_SYSCOMMAND,
         },
     },
@@ -591,6 +593,91 @@ fn open_url(url: &str) -> Result<(), String> {
     }
 }
 
+/// «Cerca <cosa> su Google»: la ricerca nel browser predefinito.
+#[tauri::command]
+fn web_search(query: String) -> Result<String, String> {
+    let query = query.trim();
+    if query.is_empty() || query.len() > 500 {
+        return Err("Ricerca vuota o troppo lunga.".into());
+    }
+    let url = Url::parse_with_params("https://www.google.com/search", [("q", query)])
+        .map_err(|error| error.to_string())?;
+    open_url(url.as_str())?;
+    Ok(format!("Cerco «{query}» su Google."))
+}
+
+/// "… e premi invio" in fondo: il testo senza la richiesta, e se premere Invio.
+/// Il punto finale lo aggiunge la trascrizione: in un campo di ricerca non serve.
+fn split_enter(text: &str) -> (String, bool) {
+    let trimmed = text.trim().trim_end_matches(['.', '!', ',', ';']).trim_end();
+    for suffix in [" e premi invio", " premi invio", " e invia", " e dai invio", " and press enter"] {
+        let cut = trimmed.len().saturating_sub(suffix.len());
+        if trimmed.len() > suffix.len()
+            && trimmed.is_char_boundary(cut)
+            && trimmed[cut..].eq_ignore_ascii_case(suffix)
+        {
+            return (trimmed[..cut].trim_end_matches(',').trim_end().to_string(), true);
+        }
+    }
+    let text = text.trim();
+    (text.strip_suffix('.').unwrap_or(text).to_string(), false)
+}
+
+/// «Scrivi <testo>»: lo digita, come da tastiera, nella finestra che era in primo piano al
+/// «Hey Jev». Invio solo se richiesto a voce: in un terminale eseguirebbe un comando.
+#[tauri::command]
+fn type_text(app: AppHandle, text: String) -> Result<String, String> {
+    let (text, enter) = split_enter(&text);
+    if text.is_empty() || text.chars().count() > 2_000 {
+        return Err("Testo vuoto o troppo lungo.".into());
+    }
+    let target = TARGET_WINDOW.load(Ordering::Acquire) as HWND;
+    let own = app
+        .get_webview_window("main")
+        .and_then(|window| window.hwnd().ok())
+        .map(|own| own.0 as isize);
+    if target.is_null() || own == Some(target as isize) {
+        return Err("Nessuna finestra in cui scrivere.".into());
+    }
+    unsafe { SetForegroundWindow(target) };
+    thread::sleep(Duration::from_millis(120)); // la finestra riprende il focus prima dei tasti
+    let mut inputs = Vec::new();
+    for unit in text.encode_utf16() {
+        if unit == u16::from(b'\n') {
+            inputs.extend([keyboard_input(VK_RETURN, 0), keyboard_input(VK_RETURN, KEYEVENTF_KEYUP)]);
+        } else {
+            inputs.extend([
+                unicode_input(unit, KEYEVENTF_UNICODE),
+                unicode_input(unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP),
+            ]);
+        }
+    }
+    if enter {
+        inputs.extend([keyboard_input(VK_RETURN, 0), keyboard_input(VK_RETURN, KEYEVENTF_KEYUP)]);
+    }
+    let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
+    if sent as usize != inputs.len() {
+        return Err("Windows non ha accettato il testo.".into());
+    }
+    Ok(if enter { "Scritto e inviato." } else { "Scritto." }.into())
+}
+
+/// Un carattere qualsiasi (accenti, simboli, emoji) indipendentemente dal layout di tastiera.
+fn unicode_input(unit: u16, flags: u32) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: 0,
+                wScan: unit,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
 fn send_chord(modifier: u16, key: u16) -> Result<(), String> {
     let inputs = [
         keyboard_input(modifier, 0),
@@ -718,6 +805,8 @@ pub fn run() {
             jev_key_configured,
             set_jev_key,
             open_link,
+            web_search,
+            type_text,
             check_for_update,
             install_pending_update,
             ai::ai_create,
@@ -730,6 +819,16 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn typed_text_asks_for_enter_only_explicitly() {
+        use super::split_enter;
+        assert_eq!(split_enter("Ciao a tutti."), ("Ciao a tutti".into(), false));
+        assert_eq!(split_enter("ricette carbonara e premi invio."), ("ricette carbonara".into(), true));
+        assert_eq!(split_enter("Ciao Marco, a domani, e invia!"), ("Ciao Marco, a domani".into(), true));
+        assert_eq!(split_enter("Città è già là"), ("Città è già là".into(), false));
+        assert_eq!(split_enter("premi invio"), ("premi invio".into(), false)); // solo il suffisso: si scrive
+    }
+
     #[test]
     fn wav_header_matches_samples() {
         let wav = super::wav_bytes(&[0.0, 1.0, -1.0], 48_000);

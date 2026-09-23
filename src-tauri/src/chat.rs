@@ -54,6 +54,8 @@ fn tools() -> Value {
     json!([
         tool("open_app", "Apre un'app installata.", Some(("name", "Nome esatto dell'app, dalla lista delle app installate."))),
         tool("close_app", "Chiude un'app aperta.", Some(("name", "Nome esatto dell'app, dalla lista delle app installate."))),
+        tool("web_search", "Cerca su Google.", Some(("query", "Cosa cercare."))),
+        tool("type_text", "Scrive un testo nella finestra in primo piano.", Some(("text", "Il testo da scrivere, esattamente come detto."))),
         tool("open_terminal", "Apre il terminale di Windows.", None),
         tool("open_claude", "Apre Claude nel browser.", None),
         tool("open_chatgpt", "Apre ChatGPT nel browser.", None),
@@ -100,9 +102,10 @@ async fn choose(app: &AppHandle, text: &str) -> Result<Vec<String>, String> {
 }
 
 /// Azioni tra cui sceglie Jev (nome strumento, quando sceglierla).
-const ACTIONS: [(&str, &str); 12] = [
+const ACTIONS: [(&str, &str); 13] = [
     ("open_app", "Aprire, avviare, lanciare, far partire o mettere su un'app o un programma."),
     ("close_app", "Chiudere, spegnere, togliere o levare di torno un'app o un programma nominandolo."),
+    ("web_search", "Cercare qualcosa su Google o su internet."),
     ("open_terminal", "Aprire il terminale o il prompt dei comandi."),
     ("open_claude", "Aprire Claude."),
     ("open_chatgpt", "Aprire ChatGPT."),
@@ -184,6 +187,8 @@ fn pick(answers: &Value, text: &str) -> (String, Value) {
         "open_app" | "close_app" => (action, json!({ "name": app })),
         // La frase intera è la richiesta: il modello che scrive ignora il "creami…".
         "create_document" | "create_website" => (action, json!({ "request": text })),
+        // Google capisce la frase intera ("cercami come si fa la carbonara").
+        "web_search" => (action, json!({ "query": text })),
         known if ACTIONS.iter().any(|(name, _)| *name == known) => (known, json!({})),
         _ => ("not_a_command", json!({})),
     };
@@ -274,6 +279,7 @@ mod jev_eval {
             ("Vorrei lavorare sul gestionale dell'officina", "open_app", "PitStop Workshop Manager"),
             ("Chiudi Chrome", "close_app", "Google Chrome"),
             ("Levami di torno la calcolatrice", "close_app", "Calcolatrice"),
+            ("Cercami su internet come si fa la carbonara", "web_search", ""),
         ];
         let key = crate::jev_key().expect("chiave Jev nel Credential Manager");
         let apps = ["Spotify", "Calcolatrice", "Esplora file", "SmileSync", "PitStop Workshop Manager", "Google Chrome"];

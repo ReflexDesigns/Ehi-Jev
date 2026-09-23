@@ -97,6 +97,15 @@ const OPEN_APP =
 const CLOSE_APP =
   /\b(?:chiudi|close)\s+(?:(?:l['’]\s*)?app(?:licazione)?\s+|il\s+programma\s+|l['’]\s*|(?:il|lo|la|i|gli|le|the)\s+)?([^,.;:!?]+?)\s*(?=[,.;:!?]|\s(?:e|ed|and|poi|then|per\s+favore|please|grazie|thanks?)\b|$)/gi;
 
+/** «Cerca <cosa> (su Google)»: ricerca nel browser. «Cerca aggiornamenti» resta check_update. */
+const SEARCH =
+  /\b(?:cerca(?:mi)?|search(?:\s+for)?)\s+(?:su\s+google\s+)?([^,.;:!?]+?)(?:\s+(?:su|on|in)\s+(?:google|internet|web))?\s*(?=[,.;:!?]|$)/gi;
+
+/** «Scrivi <testo>»: tutto quello che segue si digita (dalla frase originale: maiuscole e accenti). */
+const TYPE = /\b(?:scrivi|digita|type)\s+(.+)$/i;
+/** Un «grazie» in fondo è per Jev, non da scrivere. */
+const THANKS = /[\s,.;]+(?:grazie(?:\s+mille)?|thank\s*you)[.!]?\s*$/i;
+
 /** Parole che chiudono la sessione di ascolto. */
 const STOP = /\b(?:grazie(?:\s*mille)?|silenzio|basta|stop|ok(?:ay)?|annulla|cancel|ciao|thank\s*you)\b/gi;
 
@@ -113,7 +122,7 @@ export function parseCommands(transcript: string): string[] {
       for (const match of text.matchAll(pattern)) found.push({ action: rule.action, index: match.index ?? 0 });
     }
   }
-  for (const [pattern, action] of [[OPEN_APP, 'open_app'], [CLOSE_APP, 'close_app']] as const) {
+  for (const [pattern, action] of [[OPEN_APP, 'open_app'], [CLOSE_APP, 'close_app'], [SEARCH, 'search']] as const) {
     for (const match of text.matchAll(pattern)) {
       const index = match.index ?? 0;
       if (!found.some((command) => command.index === index)) found.push({ action: `${action}:${match[1]}`, index });
@@ -121,8 +130,16 @@ export function parseCommands(transcript: string): string[] {
   }
   // Dopo "crea …" il resto è la richiesta per l'AI, non altri comandi.
   const create = creation(text);
+  const typed = create ? null : TYPE.exec(text);
+  const original = TYPE.exec(transcript);
   if (create) {
     found.splice(0, found.length, ...found.filter((command) => command.index < create.index), create);
+  } else if (typed && original) {
+    // Anche «scrivi apri il terminale» o «scrivi ciao Marco» si scrive e basta: niente
+    // comandi né parole di chiusura dentro il testo; chiude solo un «grazie» in fondo.
+    const before = found.filter((command) => command.index < typed.index).sort((a, b) => a.index - b.index);
+    const actions = [...before.map((command) => command.action), `type_text:${original[1].replace(THANKS, '')}`];
+    return THANKS.test(original[1]) ? [...actions, 'cancel'] : actions;
   }
   found.sort((a, b) => a.index - b.index);
   const lastCommand = found.length ? found[found.length - 1].index : -1;

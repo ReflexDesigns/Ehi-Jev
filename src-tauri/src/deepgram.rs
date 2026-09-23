@@ -138,7 +138,9 @@ async fn listen(
         ("sample_rate", STT_RATE.to_string()),
         ("channels", "1".into()),
         ("interim_results", "true".into()),
-        ("smart_format", "true".into()),
+        // Solo punteggiatura: smart_format scriveva "seconda riga" come "2º riga" (misurato),
+        // male per «Scrivi …». I numeri restano come si dicono.
+        ("punctuate", "true".into()),
         // Fine frase dopo 300 ms di silenzio; UtteranceEnd come rete di sicurezza.
         ("endpointing", "300".into()),
         ("utterance_end_ms", "1000".into()),
