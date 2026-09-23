@@ -1,6 +1,6 @@
 # HeyJev — assistente vocale per Windows
 
-HeyJev è un prototipo desktop Windows 10/11 di assistente a comandi vocali brevi. La wake word offline **“Hey Jev”** attiva **The Notch**, un overlay trasparente con onda audio reattiva. La trascrizione usa Whisper.cpp locale; Jev/TypeSafe può classificare il testo in una lista chiusa di azioni. Se l’API non è configurata, viene usato il parser regex locale.
+HeyJev è un prototipo desktop Windows 10/11 di assistente a comandi vocali brevi. La wake word offline **“Hey Jev”** fa scendere dall’alto **The Notch** (stile Dynamic Island), un overlay con onda audio reattiva; a riposo resta nascosto sopra lo schermo. La trascrizione usa Whisper.cpp locale; Jev/TypeSafe può classificare il testo in una lista chiusa di azioni. Se l’API non è configurata, viene usato il parser regex locale.
 
 > Jev non è un agente con accesso arbitrario al PC: può eseguire soltanto gli intenti elencati qui sotto. Le frasi naturali e le parafrasi possono essere classificate dall’API, ma sempre verso questa lista consentita.
 
@@ -14,7 +14,7 @@ Prima di ogni comando pronuncia **“Hey Jev”**. Il rilevatore configurato usa
 | “Apri Claude” / “Open Claude” | “Launch Claude” | Apre `claude.ai` nel browser predefinito |
 | “Apri GPT” / “Open GPT” | “Apri ChatGPT”, “Open ChatGPT” | Apre `chatgpt.com` nel browser predefinito |
 | “Mostra desktop” / “Show desktop” | “Mostra scrivania” | Invia **Win + D** |
-| “Chiudi questo” / “Close this” | “Chiudi la finestra”, “Close the window” | Invia **Alt + F4** alla finestra attiva; usalo con attenzione |
+| “Chiudi questo” / “Close this” | “Chiudi la finestra”, “Close the window” | Chiude (come **Alt + F4**) la finestra attiva quando hai detto “Hey Jev”; mai HeyJev né il desktop |
 | “Annulla” / “Cancel” | “Grazie”, “Thank you”, “Ciao” | Annulla/chiude The Notch senza un’altra azione |
 | “Check the update” / “Controlla aggiornamenti” | “Check for updates”, “Verifica aggiornamenti” | Cerca una release privata firmata e mostra il pulsante di installazione; l’update parte solo dopo il clic |
 
@@ -25,8 +25,8 @@ La lista è definita nel parser offline (`src/lib/commandParser.ts`) e nella cla
 | Componente | Implementazione |
 |---|---|
 | Desktop Windows | Tauri 2, Rust e React/TypeScript |
-| Wake word | sherpa-onnx KWS in Rust + CPAL, offline; modello inglese `HEY JEV` |
-| Speech-to-text | Whisper.cpp locale, lingua automatica (`WHISPER_LANGUAGE=auto`) |
+| Wake word + registrazione comando | sherpa-onnx KWS in Rust + CPAL, offline; `HEY JEV` con varianti foniche (`scripts/setup-kws.ps1`). Dopo la wake word Rust registra il comando sullo stesso stream (fine a pausa, max 6 s): nessun permesso microfono nella WebView |
+| Speech-to-text | Whisper.cpp locale, italiano di default (`WHISPER_LANGUAGE=it`) con prompt dei comandi; capisce anche i comandi inglesi |
 | Parsing | Jev/TypeSafe `SystemOne` con lista chiusa di intenti; regex come fallback offline |
 | Automazioni Windows | Rust + `windows-sys`; `ShellExecuteW` e `SendInput` |
 | Overlay | WebView frameless/trasparente, always-on-top; onda Canvas 2D |
@@ -52,7 +52,7 @@ L’icona sorgente è `public/app-icon.svg`. `npm run icons` genera le icone Tau
    .\scripts\setup-whisper.ps1
    ```
 
-3. I percorsi predefiniti di Whisper sono già impostati nel template `.env.example`; `WHISPER_MODEL_PATH`, `WHISPER_CPP_BIN` e `WHISPER_LANGUAGE` servono solo se vuoi sovrascrivere il bundle.
+3. Modelli e `whisper-cli.exe` vengono trovati nella cartella risorse dell’app (`target\<profilo>\models` in sviluppo, `models\` accanto a `heyjev.exe` una volta installata). `WHISPER_*`, `WAKE_MODEL_DIR` e `WAKE_THRESHOLD` (sensibilità wake word) servono solo come override. In sviluppo `.env.local` va nella radice del repo; nell’app installata in `%APPDATA%\com.heyjev.app\.env.local`.
 4. Verifica l’accesso al microfono nelle impostazioni di Windows. Al primo avvio premi **Attiva** per avviare il rilevatore.
 
 ## Avvio e installer
@@ -76,7 +76,7 @@ Il file si trova in `src-tauri/target/release/bundle/nsis/`. La build richiede t
 
 Quando trova una versione nuova, The Notch mostra **Installa <versione>**. L’installazione richiede quel clic esplicito e Windows chiude l’app mentre applica il pacchetto firmato. La verifica della firma Tauri è obbligatoria.
 
-La GitHub Action `.github/workflows/release.yml` compila e pubblica installer, firme e `latest.json` a ogni tag Git `v*`. Prima di spingere una nuova release, aggiorna i file versione con `node scripts/set-version.mjs X.Y.Z`, committa la modifica, quindi crea e spingi il tag corrispondente (`vX.Y.Z`). In GitHub Actions deve essere configurato il secret `TAURI_SIGNING_PRIVATE_KEY`; la chiave privata locale è esclusa da Git. **Il primo installer updater-enabled va installato manualmente**: un installer creato prima dell’integrazione dell’updater non può auto-aggiornarsi.
+La GitHub Action `.github/workflows/release.yml` compila e pubblica installer, firme e `latest.json` a ogni tag Git `v*`. Prima di spingere una nuova release, aggiorna i file versione con `node scripts/set-version.mjs X.Y.Z`, committa la modifica, quindi crea e spingi il tag corrispondente (`vX.Y.Z`). In GitHub Actions deve essere configurato il secret `TAURI_SIGNING_PRIVATE_KEY`; la chiave privata locale è esclusa da Git. **Il primo installer updater-enabled va installato manualmente**: un installer creato prima dell’integrazione dell’updater non può auto-aggiornarsi. Anche 0.2.2 e 0.2.3 (updater e percorsi modelli rotti) vanno sostituite installando la 0.2.4 a mano.
 
 ## Struttura principale
 
@@ -95,6 +95,7 @@ models/                      modelli locali (esclusi da Git)
 ## Verifiche
 
 ```powershell
+npm test
 npm run build
 cargo check --manifest-path src-tauri\Cargo.toml
 ```

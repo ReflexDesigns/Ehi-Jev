@@ -1,13 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import SoundWave from './SoundWave';
-import type { AudioFrame } from '../lib/micRecorder';
 import type { UpdateSummary } from '../lib/osControl';
 import type { AppState } from '../types';
 
 interface NotchProps {
   state: AppState;
   status: string;
-  getFrame?: () => AudioFrame;
+  getLevel?: () => number;
   showTokenSetup?: boolean;
   tokenBusy?: boolean;
   updateAvailable?: UpdateSummary | null;
@@ -17,6 +16,7 @@ interface NotchProps {
   onImportUpdateToken?: () => Promise<void>;
   onCancelTokenSetup?: () => void;
   onInstallUpdate?: () => void;
+  onDismissUpdate?: () => void;
 }
 
 /**
@@ -28,7 +28,7 @@ interface NotchProps {
 export default function Notch({
   state,
   status,
-  getFrame,
+  getLevel,
   showTokenSetup = false,
   tokenBusy = false,
   updateAvailable = null,
@@ -37,6 +37,7 @@ export default function Notch({
   onImportUpdateToken,
   onCancelTokenSetup,
   onInstallUpdate,
+  onDismissUpdate,
 }: NotchProps) {
   const [token, setToken] = useState('');
 
@@ -55,7 +56,7 @@ export default function Notch({
             <img src="/app-icon.svg" alt="HeyJev" draggable={false} />
           </div>
           <div className="notch-body">
-            <SoundWave state={state} getFrame={getFrame} />
+            <SoundWave state={state} getLevel={getLevel} />
             <div className="notch-status">{status}</div>
           </div>
           {state === 'setup' && onActivate ? (
@@ -66,6 +67,11 @@ export default function Notch({
           {updateAvailable && onInstallUpdate ? (
             <button type="button" className="update-button" onClick={onInstallUpdate}>
               Installa {updateAvailable.version}
+            </button>
+          ) : null}
+          {updateAvailable && onDismissUpdate ? (
+            <button type="button" className="update-button secondary-button" onClick={onDismissUpdate}>
+              Più tardi
             </button>
           ) : null}
         </div>

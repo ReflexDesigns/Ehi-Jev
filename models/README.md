@@ -1,12 +1,8 @@
-# Modello Whisper.cpp
+# Modelli locali (esclusi da Git)
 
-Per preparare il motore wake word offline, esegui `scripts/setup-kws.ps1` dalla
-radice del progetto: scarica il modello English KWS e crea i token di `HEY JEV`
-in questa cartella.
+`npm run setup:models` (eseguito anche da `tauri dev`/`tauri build`) prepara:
 
-Scarica il file multilingue `ggml-tiny.bin` dal repository dei modelli
-whisper.cpp e salvalo qui come `whisper-tiny.bin`, in modo che il percorso
-corrisponda a `WHISPER_MODEL_PATH` in `.env.local`.
+- `sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/` — wake word offline English e `keywords.txt` per `HEY JEV` (`scripts/setup-kws.ps1`).
+- `whisper/ggml-tiny.bin` e `whisper/bin/` — modello Whisper tiny multilingue e `whisper-cli.exe` ufficiale (`scripts/setup-whisper.ps1`).
 
-L'app lancia `whisper-cli.exe` solo dopo una wake word; il modello non viene
-caricato durante l'ascolto passivo.
+Download verificati con SHA-256. `src-tauri/tauri.conf.json` copia nell'installer solo i file usati, in `models\` accanto a `heyjev.exe`.

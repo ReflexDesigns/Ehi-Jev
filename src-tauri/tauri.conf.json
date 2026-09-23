@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "HeyJev",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "identifier": "com.heyjev.app",
   "build": {
-    "beforeDevCommand": "npm run setup:models && npm run icons && npm run dev",
+    "beforeDevCommand": "npm run setup:models && npm run dev",
     "devUrl": "http://127.0.0.1:3000",
-    "beforeBuildCommand": "npm run setup:models && npm run icons && npm run build",
+    "beforeBuildCommand": "npm run setup:models && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -32,7 +32,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: blob:; media-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https:; worker-src 'self' blob:"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: blob:; media-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost; worker-src 'self' blob:"
     }
   },
   "bundle": {
@@ -47,12 +47,17 @@
         "languages": [
           "Italian",
           "English"
-        ]
+        ],
+        "installerHooks": "./windows/hooks.nsh"
       }
     },
-    "resources": [
-      "../models/**/*"
-    ],
+    "resources": {
+      "../models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/*-left-64.onnx": "models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/",
+      "../models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/tokens.txt": "models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/tokens.txt",
+      "../models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/keywords.txt": "models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/keywords.txt",
+      "../models/whisper/ggml-tiny.bin": "models/whisper/ggml-tiny.bin",
+      "../models/whisper/bin/*": "models/whisper/bin/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -63,9 +68,6 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM4MDFEOUE2MjVGNjlFQjAKUldTd252WWxwdGtCT01pdEtCZVJlSFpjd3pFZTVkazR0d0Q5N3pFNTNPYjhxSmplSzRMbTdHd1AK",
-      "endpoints": [
-        "https://github.com/ReflexDesigns/Ehi-Jev/releases/latest/download/latest.json"
-      ],
       "windows": {
         "installMode": "passive"
       }

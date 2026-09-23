@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
-import type { AudioFrame } from '../lib/micRecorder';
 import type { AppState } from '../types';
 
 interface SoundWaveProps {
   state: AppState;
-  getFrame?: () => AudioFrame;
+  /** Livello voce 0..1 dal microfono (backend Rust). */
+  getLevel?: () => number;
 }
 
 /**
@@ -15,7 +15,7 @@ interface SoundWaveProps {
  * - processing: bagliore pulsante + orbite rotanti (gradiente fluido).
  * - done:       onda calma di conferma.
  */
-export default function SoundWave({ state, getFrame }: SoundWaveProps) {
+export default function SoundWave({ state, getLevel }: SoundWaveProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -31,6 +31,12 @@ export default function SoundWave({ state, getFrame }: SoundWaveProps) {
     canvas.height = h * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+    // Niente loop a 60 fps quando il notch è nascosto (idle/setup/closing).
+    if (state !== 'listening' && state !== 'processing' && state !== 'done') {
+      ctx.clearRect(0, 0, w, h);
+      return;
+    }
+
     let raf = 0;
     let t = 0;
 
@@ -44,17 +50,16 @@ export default function SoundWave({ state, getFrame }: SoundWaveProps) {
       grad.addColorStop(0.7, '#7f00ff');
       grad.addColorStop(1, '#e100ff');
 
-      if (state === 'listening' && getFrame) {
-        // --- Onda reattiva alla voce ---
-        const { level, freq } = getFrame();
+      if (state === 'listening' && getLevel) {
+        // --- Onda reattiva alla voce: barre modulate dal livello, forma animata ---
+        const level = getLevel();
         const bars = 56;
         const gap = 2;
         const barW = (w - gap * (bars - 1)) / bars;
         ctx.fillStyle = grad;
         for (let i = 0; i < bars; i++) {
-          const idx = Math.floor((i / bars) * freq.length);
-          const v = (freq[idx] ?? 0) / 255;
-          const amp = Math.max(0.08, v) * (0.4 + level * 2.4);
+          const v = level * (0.45 + 0.55 * Math.abs(Math.sin(i * 0.55 + t * 7) * Math.cos(i * 0.21 - t * 3)));
+          const amp = Math.max(0.08, v);
           const bh = Math.min(amp * h * 0.85, h * 0.9);
           const x = i * (barW + gap);
           const y = (h - bh) / 2;
@@ -109,7 +114,7 @@ export default function SoundWave({ state, getFrame }: SoundWaveProps) {
 
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [state, getFrame]);
+  }, [state, getLevel]);
 
   return <canvas ref={canvasRef} className="soundwave" />;
 }

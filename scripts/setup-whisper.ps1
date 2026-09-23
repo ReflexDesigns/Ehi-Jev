@@ -1,4 +1,6 @@
 $ErrorActionPreference = 'Stop'
+# Con la progress bar Invoke-WebRequest in PowerShell 5.1 e' lentissimo sui file grandi.
+$ProgressPreference = 'SilentlyContinue'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $whisperRoot = Join-Path $repoRoot 'models\whisper'
@@ -8,9 +10,11 @@ $modelDownload = Join-Path $whisperRoot 'ggml-tiny.bin.download'
 $archive = Join-Path $env:TEMP 'heyjev-whisper-bin-b5130.zip'
 $extractDir = Join-Path $env:TEMP 'heyjev-whisper-bin-b5130'
 $binaryUrl = 'https://github.com/ggml-org/whisper.cpp/releases/download/b5130/whisper-bin-x64.zip'
-$modelUrl = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin?download=true'
+$modelUrl = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin?download=true'
 $expectedBinaryZipSha256 = 'f9ec6c52a2e949b62ab51fa21d0d497958f9e41c3010c157c4e42932d5316f3c'
 $expectedModelSha256 = 'be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21'
+$whisperVersion = 'ggml-org/whisper.cpp b5130 cli+dll'
+$versionFile = Join-Path $binaryDir '.heyjev-whisper-version'
 
 New-Item -ItemType Directory -Force -Path $whisperRoot | Out-Null
 
@@ -33,8 +37,13 @@ if (Test-Path -LiteralPath $modelPath) {
     }
 }
 
-if (-not (Test-Path -LiteralPath (Join-Path $binaryDir 'whisper-cli.exe'))) {
+$installed = (Test-Path -LiteralPath (Join-Path $binaryDir 'whisper-cli.exe')) -and
+    (Test-Path -LiteralPath $versionFile) -and
+    ((Get-Content -LiteralPath $versionFile -Raw).Trim() -eq $whisperVersion)
+if (-not $installed) {
     Write-Host 'Scarico whisper.cpp CLI ufficiale per Windows x64 (CPU)...'
+    # Cartella bin vecchia/sporca (es. esempi e test dell'archivio): si riparte da zero.
+    if (Test-Path -LiteralPath $binaryDir) { Remove-Item -LiteralPath $binaryDir -Recurse -Force }
     if (Test-Path -LiteralPath $extractDir) {
         Remove-Item -LiteralPath $extractDir -Recurse -Force
     }
@@ -50,12 +59,14 @@ if (-not (Test-Path -LiteralPath (Join-Path $binaryDir 'whisper-cli.exe'))) {
 
         New-Item -ItemType Directory -Force -Path $binaryDir | Out-Null
         Copy-Item -LiteralPath $cli.FullName -Destination $binaryDir -Force
-        Get-ChildItem -LiteralPath $cli.DirectoryName -Filter '*.dll' -File |
+        # Solo le librerie che servono a whisper-cli (niente SDL2/llama/parakeet degli esempi).
+        Get-ChildItem -LiteralPath $cli.DirectoryName -File |
+            Where-Object { $_.Name -eq 'whisper.dll' -or $_.Name -like 'ggml*.dll' } |
             Copy-Item -Destination $binaryDir -Force
         if (-not (Test-Path -LiteralPath (Join-Path $binaryDir 'whisper-cli.exe'))) {
             throw 'Copia di whisper-cli.exe o delle sue librerie runtime fallita.'
         }
-        Set-Content -LiteralPath (Join-Path $binaryDir '.heyjev-whisper-version') -Value 'ggml-org/whisper.cpp b5130' -Encoding ASCII
+        Set-Content -LiteralPath $versionFile -Value $whisperVersion -Encoding ASCII
     } finally {
         Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue

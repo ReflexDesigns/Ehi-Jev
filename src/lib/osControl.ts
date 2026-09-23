@@ -8,7 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 export interface IntentResult {
   action: string | null;
   confidence: number | null;
-  engine: 'jev' | 'regex';
+  engine: 'jev';
 }
 
 export interface UpdateSummary {
@@ -47,13 +47,6 @@ export function setListening(active: boolean): Promise<void> {
 /** Esegue un'azione di automazione Windows (es. open_terminal). */
 export function executeAction(action: string): Promise<string> {
   return invoke<string>('execute_action', { action });
-}
-
-/** Invia l'audio WAV al backend che lo trascrive con Whisper.cpp. */
-export function transcribeAudio(wav: ArrayBuffer): Promise<string> {
-  return invoke<string>('transcribe_audio', {
-    audio: Array.from(new Uint8Array(wav)),
-  });
 }
 
 /**

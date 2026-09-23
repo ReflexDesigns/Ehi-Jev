@@ -1,5 +1,17 @@
 use std::{
-    env, fs, mem::size_of, path::PathBuf, process::Command, ptr, sync::Mutex, time::Duration,
+    env,
+    fs::{self, File},
+    mem::size_of,
+    os::windows::process::CommandExt,
+    path::PathBuf,
+    process::{Command, Stdio},
+    ptr,
+    sync::{
+        atomic::{AtomicIsize, Ordering},
+        Mutex,
+    },
+    thread,
+    time::{Duration, Instant},
 };
 
 use serde::Serialize;
@@ -7,16 +19,22 @@ use serde_json::{json, Value};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Emitter, Manager, PhysicalPosition, State,
+    AppHandle, Emitter, Manager, PhysicalPosition, State, Url, WindowEvent,
 };
 use tauri_plugin_updater::{Update, UpdaterExt};
-use windows_sys::Win32::UI::{
-    Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_D, VK_F4,
-        VK_LWIN, VK_MENU,
+use windows_sys::Win32::{
+    Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HWND},
+    System::Threading::CreateMutexW,
+    UI::{
+        Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_D, VK_LWIN,
+        },
+        Shell::ShellExecuteW,
+        WindowsAndMessaging::{
+            GetClassNameW, GetForegroundWindow, PostMessageW, SC_CLOSE, SW_SHOWNORMAL,
+            WM_SYSCOMMAND,
+        },
     },
-    Shell::ShellExecuteW,
-    WindowsAndMessaging::SW_SHOWNORMAL,
 };
 
 mod wake;
@@ -42,8 +60,25 @@ const UPDATE_TOKEN_SERVICE: &str = "com.heyjev.app";
 const UPDATE_TOKEN_ACCOUNT: &str = "private-github-releases";
 const UPDATE_RELEASES_API: &str = "https://api.github.com/repos/ReflexDesigns/Ehi-Jev/releases";
 
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const WHISPER_TIMEOUT: Duration = Duration::from_secs(20);
+// Vocabolario dei comandi: guida Whisper tiny verso le frasi attese (IT + EN).
+const WHISPER_PROMPT: &str = "Apri terminale. Apri Claude. Apri ChatGPT. Mostra desktop. Chiudi questo. Controlla aggiornamenti. Annulla. Grazie. Open terminal. Open Claude. Show desktop. Close this. Check for updates. Cancel.";
+
+/// Finestra in primo piano al momento della wake word: bersaglio di `close_current`.
+static TARGET_WINDOW: AtomicIsize = AtomicIsize::new(0);
+
+pub(crate) fn remember_foreground_window() {
+    TARGET_WINDOW.store(unsafe { GetForegroundWindow() } as isize, Ordering::Release);
+}
+
+/// Carica `%APPDATA%\com.heyjev.app\.env.local`; quello del repo solo in debug.
+/// Mai dalla cwd: un `.env.local` piantato lì potrebbe puntare a EXE arbitrari.
 fn load_environment(app: &tauri::AppHandle) {
-    let mut candidates = vec![env::current_dir().unwrap_or_default().join(".env.local")];
+    let mut candidates = Vec::new();
+    if cfg!(debug_assertions) {
+        candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.env.local"));
+    }
     if let Ok(path) = app.path().app_config_dir() {
         candidates.push(path.join(".env.local"));
     }
@@ -92,56 +127,78 @@ fn set_clickthrough(app: &AppHandle, ignore: bool) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-async fn transcribe_audio(app: AppHandle, audio: Vec<u8>) -> Result<String, String> {
-    if audio.len() < 44
-        || audio.len() > 12 * 1024 * 1024
-        || &audio[0..4] != b"RIFF"
-        || &audio[8..12] != b"WAVE"
-    {
-        return Err("Audio WAV non valido o troppo grande.".into());
+/// PCM float mono -> WAV 16 bit (Whisper ricampiona da solo a 16 kHz).
+fn wav_bytes(samples: &[f32], sample_rate: u32) -> Vec<u8> {
+    let data_len = samples.len() as u32 * 2;
+    let mut wav = [
+        b"RIFF".as_slice(),
+        &(36 + data_len).to_le_bytes(),
+        b"WAVEfmt ",
+        &16u32.to_le_bytes(),
+        &1u16.to_le_bytes(), // PCM
+        &1u16.to_le_bytes(), // mono
+        &sample_rate.to_le_bytes(),
+        &(sample_rate * 2).to_le_bytes(),
+        &2u16.to_le_bytes(),
+        &16u16.to_le_bytes(),
+        b"data",
+        &data_len.to_le_bytes(),
+    ]
+    .concat();
+    for sample in samples {
+        wav.extend_from_slice(&((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16).to_le_bytes());
     }
-    tauri::async_runtime::spawn_blocking(move || transcribe_with_whisper(audio, app))
-        .await
-        .map_err(|error| format!("Worker Whisper non disponibile: {error}"))?
+    wav
 }
 
-fn transcribe_with_whisper(audio: Vec<u8>, app: AppHandle) -> Result<String, String> {
-    let model = resolve_whisper_file(&app, "WHISPER_MODEL_PATH", "models/whisper/ggml-tiny.bin")?;
-    let bundled_binary = app
-        .path()
-        .resource_dir()
-        .map_err(|error| format!("Cartella risorse HeyJev non accessibile: {error}"))?
-        .join("models/whisper/bin/whisper-cli.exe");
-    let configured_binary = env::var("WHISPER_CPP_BIN").ok().map(PathBuf::from);
-    let binary = configured_binary
-        .as_ref()
-        .filter(|path| path.is_file())
-        .cloned()
-        .or_else(|| bundled_binary.is_file().then_some(bundled_binary))
-        .or(configured_binary)
-        .unwrap_or_else(|| PathBuf::from("whisper-cli.exe"));
-    let language = env::var("WHISPER_LANGUAGE").unwrap_or_else(|_| "auto".into());
+pub(crate) fn transcribe(
+    app: &AppHandle,
+    samples: &[f32],
+    sample_rate: u32,
+) -> Result<String, String> {
+    let model = resource_path(app, "WHISPER_MODEL_PATH", "models/whisper/ggml-tiny.bin")?;
+    let binary = resource_path(app, "WHISPER_CPP_BIN", "models/whisper/bin/whisper-cli.exe")?;
+    // Whisper tiny con "auto" scambia comandi italiani brevi per altre lingue.
+    let language = env::var("WHISPER_LANGUAGE").unwrap_or_else(|_| "it".into());
     let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
     let input = temporary.path().join("command.wav");
     let output = temporary.path().join("transcript");
-    fs::write(&input, audio).map_err(|error| error.to_string())?;
+    let log = temporary.path().join("whisper.log");
+    fs::write(&input, wav_bytes(samples, sample_rate)).map_err(|error| error.to_string())?;
+    let log_file = File::create(&log).map_err(|error| error.to_string())?;
 
-    let result = Command::new(binary)
-        .args(["-m"])
-        .arg(model)
-        .args(["-f"])
-        .arg(input)
-        .args(["-l", language.as_str(), "-t", "2", "-nt", "-otxt", "-of"])
+    let mut child = Command::new(&binary)
+        .arg("-m")
+        .arg(&model)
+        .arg("-f")
+        .arg(&input)
+        .args(["-l", language.as_str(), "--prompt", WHISPER_PROMPT])
+        .args(["-t", "2", "-nt", "-otxt", "-of"])
         .arg(&output)
-        .output()
-        .map_err(|error| {
-            format!("Avvio Whisper.cpp fallito: {error}. Verifica i file inclusi nell'installer o WHISPER_CPP_BIN.")
-        })?;
-    if !result.status.success() {
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(log_file)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|error| format!("Avvio Whisper.cpp fallito ({}): {error}", binary.display()))?;
+    let deadline = Instant::now() + WHISPER_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Whisper.cpp non ha risposto entro 20 secondi.".into());
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    if !status.success() {
+        let log = fs::read_to_string(&log).unwrap_or_default();
+        let detail = log.lines().rev().find(|line| !line.trim().is_empty());
         return Err(format!(
-            "Whisper.cpp ha restituito un errore: {}",
-            String::from_utf8_lossy(&result.stderr).trim()
+            "Whisper.cpp ha restituito un errore ({status}): {}",
+            detail.unwrap_or("nessun dettaglio")
         ));
     }
     fs::read_to_string(output.with_extension("txt"))
@@ -149,39 +206,30 @@ fn transcribe_with_whisper(audio: Vec<u8>, app: AppHandle) -> Result<String, Str
         .map_err(|error| format!("Whisper non ha prodotto la trascrizione: {error}"))
 }
 
-fn resolve_whisper_file(
+/// Risolve un path (default o override da env) sulla cartella risorse:
+/// `target\<profilo>\` in sviluppo, cartella d'installazione nell'app installata.
+pub(crate) fn resource_path(
     app: &AppHandle,
     env_name: &str,
-    bundled_relative_path: &str,
+    default: &str,
 ) -> Result<PathBuf, String> {
-    let current_dir = env::current_dir().unwrap_or_default();
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|error| format!("Cartella risorse HeyJev non accessibile: {error}"))?;
-
-    if let Ok(configured) = env::var(env_name) {
-        let path = PathBuf::from(configured);
-        let candidates = if path.is_absolute() {
-            vec![path]
-        } else {
-            vec![current_dir.join(&path), resource_dir.join(path)]
-        };
-        if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
-            return Ok(path);
-        }
+    let path = PathBuf::from(env::var(env_name).unwrap_or_else(|_| default.into()));
+    let path = if path.is_absolute() {
+        path
+    } else {
+        app.path()
+            .resource_dir()
+            .map_err(|error| format!("Cartella risorse HeyJev non accessibile: {error}"))?
+            .join(path)
+    };
+    if path.exists() {
+        Ok(path)
+    } else {
+        Err(format!(
+            "File HeyJev mancante: {}. Reinstalla HeyJev (in sviluppo: npm run setup:models).",
+            path.display()
+        ))
     }
-
-    let bundled = PathBuf::from(bundled_relative_path);
-    let candidates = [current_dir.join(&bundled), resource_dir.join(bundled)];
-    candidates
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            format!(
-                "Modello Whisper non trovato. Il modello incluso dovrebbe trovarsi in models/whisper/ggml-tiny.bin; esegui npm run setup:whisper."
-            )
-        })
 }
 
 #[tauri::command]
@@ -191,6 +239,9 @@ async fn parse_intent(transcript: String) -> Result<IntentResult, String> {
     }
     let key = configured_key().ok_or_else(|| "Configura JEV_API_KEY per usare Jev.".to_string())?;
     let base = env::var("JEV_API_BASE_URL").unwrap_or_else(|_| "https://api.typesafe.ai/v1".into());
+    if !base.starts_with("https://") {
+        return Err("JEV_API_BASE_URL deve usare https://.".into());
+    }
     let model = env::var("JEV_MODEL")
         .or_else(|_| env::var("TYPESAFE_MODEL"))
         .unwrap_or_else(|_| "jev-latest".into());
@@ -321,13 +372,39 @@ fn validate_token_shape(token: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn verify_release_read_access(token: &str) -> Result<(), String> {
-    let client = reqwest::Client::builder()
+fn github_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
         .timeout(Duration::from_secs(12))
         .user_agent("HeyJev-Updater")
         .build()
-        .map_err(|_| "Impossibile inizializzare il controllo del token.".to_string())?;
-    let response = client
+        .map_err(|_| "Impossibile inizializzare il client GitHub.".to_string())
+}
+
+/// Repo privato: `github.com/.../releases/latest/download/latest.json` dà 404 anche col token.
+/// Si passa dall'API: URL dell'asset `latest.json` della release più recente.
+async fn latest_manifest_url(token: &str) -> Result<Url, String> {
+    let release: Value = github_client()?
+        .get(format!("{UPDATE_RELEASES_API}/latest"))
+        .bearer_auth(token)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|_| "GitHub non raggiungibile: controlla la connessione.".to_string())?
+        .error_for_status()
+        .map_err(|error| format!("GitHub ha rifiutato la richiesta release: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("Risposta release GitHub non valida: {error}"))?;
+    release["assets"]
+        .as_array()
+        .and_then(|assets| assets.iter().find(|asset| asset["name"] == "latest.json"))
+        .and_then(|asset| asset["url"].as_str())
+        .and_then(|url| url.parse().ok())
+        .ok_or_else(|| "L'ultima release GitHub non contiene latest.json.".to_string())
+}
+
+async fn verify_release_read_access(token: &str) -> Result<(), String> {
+    let response = github_client()?
         .get(UPDATE_RELEASES_API)
         .bearer_auth(token)
         .header("Accept", "application/vnd.github+json")
@@ -371,17 +448,22 @@ async fn check_for_update(
     pending: State<'_, PendingUpdate>,
 ) -> Result<Option<UpdateSummary>, String> {
     let token = stored_update_token()?;
+    let manifest = latest_manifest_url(&token).await?;
+    // Accept octet-stream vale per manifest e installer (asset API); reqwest toglie
+    // Authorization sul redirect cross-host verso lo storage firmato di GitHub.
     let update = app
         .updater_builder()
+        .endpoints(vec![manifest])
+        .map_err(|error| format!("Endpoint updater non valido: {error}"))?
         .header("Authorization", format!("Bearer {token}"))
         .map_err(|_| "Impossibile preparare l'autenticazione GitHub.".to_string())?
+        .header("Accept", "application/octet-stream")
+        .map_err(|_| "Impossibile preparare la richiesta updater.".to_string())?
         .build()
-        .map_err(|_| "Configurazione updater non valida.".to_string())?
+        .map_err(|error| format!("Configurazione updater non valida: {error}"))?
         .check()
         .await
-        .map_err(|_| {
-            "Controllo release fallito: verifica token, accesso e release GitHub.".to_string()
-        })?;
+        .map_err(|error| format!("Controllo release fallito: {error}"))?;
 
     let Some(update) = update else {
         *pending
@@ -413,11 +495,13 @@ async fn install_pending_update(pending: State<'_, PendingUpdate>) -> Result<(),
     update
         .download_and_install(|_, _| {}, || {})
         .await
-        .map_err(|_| "Download o installazione dell'aggiornamento non riusciti.".to_string())
+        .map_err(|error| {
+            format!("Download o installazione dell'aggiornamento non riusciti: {error}")
+        })
 }
 
 #[tauri::command]
-fn execute_action(action: String) -> Result<String, String> {
+fn execute_action(app: AppHandle, action: String) -> Result<String, String> {
     match action.as_str() {
         "open_terminal" => Command::new("wt.exe")
             .spawn()
@@ -427,10 +511,41 @@ fn execute_action(action: String) -> Result<String, String> {
         "open_claude" => open_url("https://claude.ai").map(|_| "Claude aperto.".to_string()),
         "open_gpt" => open_url("https://chatgpt.com").map(|_| "ChatGPT aperto.".to_string()),
         "show_desktop" => send_chord(VK_LWIN, VK_D).map(|_| "Desktop mostrato.".to_string()),
-        "close_current" | "close_foreground" => {
-            send_chord(VK_MENU, VK_F4).map(|_| "Finestra chiusa.".to_string())
-        }
+        "close_current" => close_target_window(&app).map(|_| "Finestra chiusa.".to_string()),
         _ => Err("Comando non consentito.".into()),
+    }
+}
+
+/// Equivale ad Alt+F4 sulla finestra attiva al momento della wake word, mai su HeyJev
+/// né sul desktop/taskbar (lì Alt+F4 aprirebbe "Arresta Windows").
+fn close_target_window(app: &AppHandle) -> Result<(), String> {
+    let hwnd = TARGET_WINDOW.swap(0, Ordering::AcqRel) as HWND;
+    let own = app
+        .get_webview_window("main")
+        .and_then(|window| window.hwnd().ok())
+        .map(|own| own.0 as isize);
+    let mut class = [0u16; 64];
+    let length = unsafe { GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32) };
+    let class = String::from_utf16_lossy(&class[..length.max(0) as usize]);
+    if hwnd.is_null()
+        || own == Some(hwnd as isize)
+        || matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd")
+    {
+        return Err("Nessuna finestra da chiudere.".into());
+    }
+    if unsafe { PostMessageW(hwnd, WM_SYSCOMMAND, SC_CLOSE as usize, 0) } == 0 {
+        return Err("Windows non ha accettato la chiusura della finestra.".into());
+    }
+    Ok(())
+}
+
+/// Seconda istanza = doppio microfono e azioni doppie: esce subito.
+fn already_running() -> bool {
+    let name: Vec<u16> = "Local\\com.heyjev.app\0".encode_utf16().collect();
+    // ponytail: handle mai chiuso di proposito, Windows lo rilascia all'uscita del processo.
+    unsafe {
+        CreateMutexW(ptr::null(), 0, name.as_ptr());
+        GetLastError() == ERROR_ALREADY_EXISTS
     }
 }
 
@@ -491,8 +606,17 @@ fn keyboard_input(key: u16, flags: u32) -> INPUT {
 }
 
 pub fn run() {
+    if already_running() {
+        return;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Alt+F4 sull'overlay non deve chiudere HeyJev: si esce solo dalla tray.
+        .on_window_event(|_, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+            }
+        })
         .manage(WakeController::default())
         .manage(PendingUpdate::default())
         .setup(|app| {
@@ -545,7 +669,6 @@ pub fn run() {
             show_window,
             hide_window,
             set_listening,
-            transcribe_audio,
             parse_intent,
             execute_action,
             set_update_token,
@@ -555,4 +678,18 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("errore avviando HeyJev");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn wav_header_matches_samples() {
+        let wav = super::wav_bytes(&[0.0, 1.0, -1.0], 48_000);
+        assert_eq!(wav.len(), 44 + 6);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..16], b"WAVEfmt ");
+        assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 48_000);
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 6);
+        assert_eq!(i16::from_le_bytes([wav[46], wav[47]]), i16::MAX);
+    }
 }

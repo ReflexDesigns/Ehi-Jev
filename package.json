@@ -1,7 +1,7 @@
 {
   "name": "heyjev",
   "private": true,
-  "version": "0.2.3",
+  "version": "0.2.4",
   "type": "module",
   "description": "HeyJev - Direttore Operativo Vocale del PC (The Notch)",
   "scripts": {
@@ -14,7 +14,8 @@
     "setup:whisper": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-whisper.ps1",
     "setup:models": "npm run setup:kws && npm run setup:whisper",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "test": "node scripts/check-parser.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",
