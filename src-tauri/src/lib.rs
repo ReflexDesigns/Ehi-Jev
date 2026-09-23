@@ -1,12 +1,15 @@
-use std::{env, fs, mem::size_of, path::PathBuf, process::Command, ptr, time::Duration};
+use std::{
+    env, fs, mem::size_of, path::PathBuf, process::Command, ptr, sync::Mutex, time::Duration,
+};
 
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Emitter, Manager, PhysicalPosition,
+    AppHandle, Emitter, Manager, PhysicalPosition, State,
 };
+use tauri_plugin_updater::{Update, UpdaterExt};
 use windows_sys::Win32::UI::{
     Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_D, VK_F4,
@@ -25,6 +28,19 @@ struct IntentResult {
     confidence: Option<f64>,
     engine: &'static str,
 }
+
+#[derive(Default)]
+struct PendingUpdate(Mutex<Option<Update>>);
+
+#[derive(Serialize)]
+struct UpdateSummary {
+    version: String,
+    notes: Option<String>,
+}
+
+const UPDATE_TOKEN_SERVICE: &str = "com.heyjev.app";
+const UPDATE_TOKEN_ACCOUNT: &str = "private-github-releases";
+const UPDATE_RELEASES_API: &str = "https://api.github.com/repos/ReflexDesigns/Ehi-Jev/releases";
 
 fn load_environment(app: &tauri::AppHandle) {
     let mut candidates = vec![env::current_dir().unwrap_or_default().join(".env.local")];
@@ -148,6 +164,7 @@ async fn parse_intent(transcript: String) -> Result<IntentResult, String> {
         "show_desktop": "Mostrare il desktop di Windows.",
         "close_current": "Chiudere la finestra in primo piano con Alt+F4.",
         "cancel": "Annullare o chiudere l'overlay HeyJev senza altra azione.",
+        "check_update": "Controllare se esiste una nuova versione firmata di HeyJev nelle release GitHub.",
         "unknown": "La richiesta non corrisponde a nessuna azione disponibile."
     });
     let request = json!({
@@ -212,6 +229,7 @@ async fn parse_intent(transcript: String) -> Result<IntentResult, String> {
         "show_desktop",
         "close_current",
         "cancel",
+        "check_update",
         "unknown",
     ];
     if probabilities.len() != allowed.len() {
@@ -237,7 +255,7 @@ async fn parse_intent(transcript: String) -> Result<IntentResult, String> {
     }
     let action = match choice {
         "open_terminal" | "open_claude" | "open_gpt" | "show_desktop" | "close_current"
-        | "cancel" => Some(choice.to_string()),
+        | "cancel" | "check_update" => Some(choice.to_string()),
         "unknown" => None,
         _ => return Err("Jev ha selezionato un'azione non consentita.".into()),
     };
@@ -246,6 +264,119 @@ async fn parse_intent(transcript: String) -> Result<IntentResult, String> {
         confidence: Some(confidence),
         engine: "jev",
     })
+}
+
+fn update_token_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(UPDATE_TOKEN_SERVICE, UPDATE_TOKEN_ACCOUNT)
+        .map_err(|_| "Windows Credential Manager non è disponibile.".to_string())
+}
+
+fn stored_update_token() -> Result<String, String> {
+    update_token_entry()?.get_password().map_err(|_| {
+        "Token GitHub non configurato. Apri la tray e scegli ‘Configura aggiornamenti’.".to_string()
+    })
+}
+
+fn validate_token_shape(token: &str) -> Result<(), String> {
+    if token.len() < 20 || token.len() > 512 || token.chars().any(char::is_whitespace) {
+        return Err("Token non valido: controlla il valore e riprova.".into());
+    }
+    Ok(())
+}
+
+async fn verify_release_read_access(token: &str) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .user_agent("HeyJev-Updater")
+        .build()
+        .map_err(|_| "Impossibile inizializzare il controllo del token.".to_string())?;
+    let response = client
+        .get(UPDATE_RELEASES_API)
+        .bearer_auth(token)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|_| "GitHub non raggiungibile: controlla la connessione.".to_string())?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err("Token rifiutato o privo di accesso alle release private. Serve Contents: read su ReflexDesigns/Ehi-Jev.".into())
+    }
+}
+
+async fn save_update_token(token: String) -> Result<(), String> {
+    let token = token.trim().to_string();
+    validate_token_shape(&token)?;
+    verify_release_read_access(&token).await?;
+    update_token_entry()?
+        .set_password(&token)
+        .map_err(|_| "Windows non ha salvato il token nel Credential Manager.".to_string())
+}
+
+#[tauri::command]
+async fn set_update_token(token: String) -> Result<(), String> {
+    save_update_token(token).await
+}
+
+/// Importa GH_TOKEN/GITHUB_TOKEN caricato da `.env.local` senza restituire il segreto al frontend.
+#[tauri::command]
+async fn import_update_token_from_env() -> Result<(), String> {
+    let token = ["GH_TOKEN", "GITHUB_TOKEN"]
+        .iter()
+        .find_map(|name| env::var(name).ok())
+        .ok_or_else(|| "Non trovo GH_TOKEN o GITHUB_TOKEN nell'ambiente dell'app.".to_string())?;
+    save_update_token(token).await
+}
+
+#[tauri::command]
+async fn check_for_update(
+    app: AppHandle,
+    pending: State<'_, PendingUpdate>,
+) -> Result<Option<UpdateSummary>, String> {
+    let token = stored_update_token()?;
+    let update = app
+        .updater_builder()
+        .header("Authorization", format!("Bearer {token}"))
+        .map_err(|_| "Impossibile preparare l'autenticazione GitHub.".to_string())?
+        .build()
+        .map_err(|_| "Configurazione updater non valida.".to_string())?
+        .check()
+        .await
+        .map_err(|_| {
+            "Controllo release fallito: verifica token, accesso e release GitHub.".to_string()
+        })?;
+
+    let Some(update) = update else {
+        *pending
+            .0
+            .lock()
+            .map_err(|_| "Stato updater non disponibile.".to_string())? = None;
+        return Ok(None);
+    };
+
+    let summary = UpdateSummary {
+        version: update.version.clone(),
+        notes: update.body.clone(),
+    };
+    *pending
+        .0
+        .lock()
+        .map_err(|_| "Stato updater non disponibile.".to_string())? = Some(update);
+    Ok(Some(summary))
+}
+
+#[tauri::command]
+async fn install_pending_update(pending: State<'_, PendingUpdate>) -> Result<(), String> {
+    let update = pending
+        .0
+        .lock()
+        .map_err(|_| "Stato updater non disponibile.".to_string())?
+        .take()
+        .ok_or_else(|| "Nessun aggiornamento in attesa. Controlla di nuovo.".to_string())?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|_| "Download o installazione dell'aggiornamento non riusciti.".to_string())
 }
 
 #[tauri::command]
@@ -324,7 +455,9 @@ fn keyboard_input(key: u16, flags: u32) -> INPUT {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(WakeController::default())
+        .manage(PendingUpdate::default())
         .setup(|app| {
             load_environment(app.handle());
             if let Some(window) = app.get_webview_window("main") {
@@ -338,8 +471,15 @@ pub fn run() {
                 window.set_ignore_cursor_events(false)?;
             }
             let show = MenuItem::with_id(app, "show", "Mostra HeyJev", true, None::<&str>)?;
+            let updates = MenuItem::with_id(
+                app,
+                "updates",
+                "Configura aggiornamenti",
+                true,
+                None::<&str>,
+            )?;
             let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &updates, &quit])?;
             let icon = app
                 .default_window_icon()
                 .ok_or_else(|| std::io::Error::other("Icona Tauri mancante; genera le icone."))?
@@ -352,6 +492,9 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {
                         let _ = app.emit("app:show", ());
+                    }
+                    "updates" => {
+                        let _ = app.emit("app:configure-update-token", ());
                     }
                     "quit" => app.exit(0),
                     _ => {}
@@ -367,7 +510,11 @@ pub fn run() {
             set_listening,
             transcribe_audio,
             parse_intent,
-            execute_action
+            execute_action,
+            set_update_token,
+            import_update_token_from_env,
+            check_for_update,
+            install_pending_update
         ])
         .run(tauri::generate_context!())
         .expect("errore avviando HeyJev");

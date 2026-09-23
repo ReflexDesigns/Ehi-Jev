@@ -16,8 +16,9 @@ Prima di ogni comando pronuncia **“Hey Jev”**. Il rilevatore configurato usa
 | “Mostra desktop” / “Show desktop” | “Mostra scrivania” | Invia **Win + D** |
 | “Chiudi questo” / “Close this” | “Chiudi la finestra”, “Close the window” | Invia **Alt + F4** alla finestra attiva; usalo con attenzione |
 | “Annulla” / “Cancel” | “Grazie”, “Thank you”, “Ciao” | Annulla/chiude The Notch senza un’altra azione |
+| “Check the update” / “Controlla aggiornamenti” | “Check for updates”, “Verifica aggiornamenti” | Cerca una release privata firmata e mostra il pulsante di installazione; l’update parte solo dopo il clic |
 
-La lista è definita nel parser offline (`src/lib/commandParser.ts`) e nella classificazione Jev (`src-tauri/src/lib.rs`). Se la trascrizione non corrisponde a un intent consentito, HeyJev non esegue comandi di sistema generici. **“Hey Jev, check the update” non è ancora attivo**: per abilitarlo vanno configurati feed e firma degli aggiornamenti (vedi [Aggiornamenti](#aggiornamenti)).
+La lista è definita nel parser offline (`src/lib/commandParser.ts`) e nella classificazione Jev (`src-tauri/src/lib.rs`). Se la trascrizione non corrisponde a un intent consentito, HeyJev non esegue comandi di sistema generici.
 
 ## Architettura
 
@@ -70,7 +71,11 @@ Il file si trova in `src-tauri/target/release/bundle/nsis/`. La build richiede t
 
 ## Aggiornamenti
 
-Il comando **“Hey Jev, check the update”** è pianificato, ma non ancora implementato/configurato. Tauri richiede un feed e la firma degli artefatti updater. Il codice può restare in un repository privato, ma l’app installata non deve contenere un token GitHub: un token incorporato nell’EXE è recuperabile da chiunque lo possieda. Un token fine-grained va eventualmente conservato come segreto CI o credenziale locale protetta, mai committato o incollato nel codice. Prima di attivare il controllo aggiornamenti vanno scelti feed, credenziale locale e firma; l’app dovrebbe chiedere conferma prima di installare un aggiornamento.
+“**Hey Jev, check the update**” controlla le release firmate nel repository privato. Se manca la credenziale, dalla System Tray scegli **Configura aggiornamenti**; inserisci il token oppure premi **Importa da .env.local**. Usa un fine-grained token limitato al solo `ReflexDesigns/Ehi-Jev` con **Contents: read**. HeyJev verifica l’accesso e conserva il token nel **Credential Manager di Windows**; non lo salva nel WebView, nel repository o nell’EXE.
+
+Quando trova una versione nuova, The Notch mostra **Installa <versione>**. L’installazione richiede quel clic esplicito e Windows chiude l’app mentre applica il pacchetto firmato. La verifica della firma Tauri è obbligatoria.
+
+La GitHub Action `.github/workflows/release.yml` compila e pubblica installer, firme e `latest.json` a ogni tag Git `v*`. Prima di spingere un tag, aggiorna i file versione con `node scripts/set-version.mjs 0.2.1`, committa la modifica, quindi crea e spingi il tag corrispondente (`v0.2.1`). In GitHub Actions deve essere configurato il secret `TAURI_SIGNING_PRIVATE_KEY`; la chiave privata locale è esclusa da Git. **Il primo installer updater-enabled va installato manualmente**: un installer creato prima dell’integrazione dell’updater non può auto-aggiornarsi.
 
 ## Struttura principale
 
@@ -79,6 +84,8 @@ src/                         UI React, overlay, wave, parser e registrazione mic
 src-tauri/src/               backend Rust, wake listener, STT, intent e OS control
 src-tauri/tauri.conf.json    finestra, CSP, bundle NSIS e icone
 scripts/setup-kws.ps1        setup del modello KWS sherpa-onnx
+scripts/set-version.mjs      sincronizza le versioni per una release taggata
+.github/workflows/release.yml build/publish automatico delle release firmate
 public/app-icon.svg          sorgente SVG icona
 models/                      modelli locali (esclusi da Git)
 ```

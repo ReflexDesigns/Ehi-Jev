@@ -11,6 +11,11 @@ export interface IntentResult {
   engine: 'jev' | 'regex';
 }
 
+export interface UpdateSummary {
+  version: string;
+  notes: string | null;
+}
+
 /** Avvia il motore locale sherpa-onnx dal backend Rust. */
 export function startWakeListener(): Promise<void> {
   return invoke<void>('start_wake_listener');
@@ -58,4 +63,24 @@ export function transcribeAudio(wav: ArrayBuffer): Promise<string> {
  */
 export function parseIntent(transcript: string): Promise<IntentResult> {
   return invoke<IntentResult>('parse_intent', { transcript });
+}
+
+/** Salva un PAT verificato nel Credential Manager, mai nel localStorage. */
+export function setUpdateToken(token: string): Promise<void> {
+  return invoke<void>('set_update_token', { token });
+}
+
+/** Importa GH_TOKEN/GITHUB_TOKEN dall'ambiente senza esporre il valore alla UI. */
+export function importUpdateTokenFromEnv(): Promise<void> {
+  return invoke<void>('import_update_token_from_env');
+}
+
+/** Controlla le release private usando il token salvato localmente. */
+export function checkForUpdate(): Promise<UpdateSummary | null> {
+  return invoke<UpdateSummary | null>('check_for_update');
+}
+
+/** Scarica e installa l'update firmato dopo la conferma esplicita dell'utente. */
+export function installPendingUpdate(): Promise<void> {
+  return invoke<void>('install_pending_update');
 }

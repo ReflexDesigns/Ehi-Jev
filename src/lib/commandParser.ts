@@ -41,6 +41,14 @@ const RULES: CommandRule[] = [
     action: 'cancel',
     patterns: [/\b(annulla|cancel|grazie|grazie\s+mille|thank\s*you|ciao)\b/i],
   },
+  {
+    action: 'check_update',
+    patterns: [
+      /\b(check|look\s+for|find)\s+(the\s+)?(for\s+)?updates?\b/i,
+      /\b(controlla|cerca|verifica)\s+(gli\s+)?aggiornamenti?\b/i,
+      /\bcontrolla\s+(gli\s+)?updates?\b/i,
+    ],
+  },
 ];
 
 /**

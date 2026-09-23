@@ -1,6 +1,6 @@
 [package]
 name = "heyjev"
-version = "0.1.0"
+version = "0.2.0"
 description = "HeyJev - Direttore Operativo Vocale del PC (The Notch)"
 authors = ["HeyJev"]
 edition = "2021"
@@ -21,9 +21,16 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tempfile = "3"
 cpal = "0.16"
 sherpa-onnx = { version = "1.13.8", default-features = false, features = ["static"] }
-windows-sys = { version = "0.61", features = [
+tauri-plugin-updater = "2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
   "Win32_Foundation",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging"
-] }
+]
