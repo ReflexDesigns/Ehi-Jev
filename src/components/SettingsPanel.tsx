@@ -16,13 +16,24 @@ interface SettingsPanelProps {
   onCheckUpdate: () => void;
   onTutorial: () => void;
   onKeys: () => void;
+  onLearned: () => void;
+  /** Salvato passando da Deepgram a Whisper: serve la registrazione completa. */
+  onWhisperChosen: () => void;
 }
 
 const SENSITIVITY = ['Bassa', 'Medio-bassa', 'Media', 'Alta', 'Molto alta'];
 
 /** Impostazioni (icona nella tray: clic, oppure tasto destro → Impostazioni…). */
-export default function SettingsPanel({ onClose, onCheckUpdate, onTutorial, onKeys }: SettingsPanelProps) {
+export default function SettingsPanel({
+  onClose,
+  onCheckUpdate,
+  onTutorial,
+  onKeys,
+  onLearned,
+  onWhisperChosen,
+}: SettingsPanelProps) {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [initialRecognition, setInitialRecognition] = useState('');
   const [aiKey, setAiKey] = useState('');
   const [jevKey, setJevKey] = useState('');
   const [deepgramKey, setDeepgramKey] = useState('');
@@ -33,7 +44,13 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onTutorial, onKe
   const [error, setError] = useState('');
 
   useEffect(() => {
-    getSettings().then(setSettings, (e) => setError(String(e)));
+    getSettings().then(
+      (loaded) => {
+        setSettings(loaded);
+        setInitialRecognition(loaded.recognition);
+      },
+      (e) => setError(String(e)),
+    );
     aiKeyConfigured().then(setAiReady, () => undefined);
     jevKeyConfigured().then(setJevReady, () => undefined);
     deepgramKeyConfigured().then(setDeepgramReady, () => undefined);
@@ -48,7 +65,8 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onTutorial, onKe
       if (jevKey.trim()) await saveJevKey(jevKey);
       if (deepgramKey.trim()) await saveDeepgramKey(deepgramKey);
       await saveSettings(settings);
-      onClose();
+      if (settings.recognition === 'local' && initialRecognition !== 'local') onWhisperChosen();
+      else onClose();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -76,8 +94,8 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onTutorial, onKe
               value={settings.recognition}
               onChange={(e) => update({ recognition: e.target.value as Settings['recognition'] })}
             >
-              <option value="deepgram">Deepgram, online (consigliato)</option>
-              <option value="local">Whisper, sul PC (offline)</option>
+              <option value="deepgram">Deepgram (online)</option>
+              <option value="local">Whisper (offline)</option>
             </select>
           </label>
           <label className="settings-row">
@@ -158,7 +176,10 @@ export default function SettingsPanel({ onClose, onCheckUpdate, onTutorial, onKe
           Chiavi
         </button>
         <button type="button" className="pill-button secondary" onClick={onTutorial}>
-          Tutorial voce
+          Registra voce
+        </button>
+        <button type="button" className="pill-button secondary" onClick={onLearned}>
+          Parole imparate
         </button>
         <button type="button" className="pill-button secondary" onClick={onClose}>
           Chiudi

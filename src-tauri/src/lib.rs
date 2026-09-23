@@ -54,6 +54,8 @@ struct UpdateSummary {
     notes: Option<String>,
 }
 
+const MAX_CUSTOM_PHRASES: usize = 50;
+
 /// Servizio delle chiavi API nel Credential Manager di Windows.
 const SECRET_SERVICE: &str = "com.heyjev.app";
 const JEV_KEY_ACCOUNT: &str = "jev-api-key";
@@ -90,6 +92,8 @@ pub(crate) struct Settings {
     pub(crate) wake_aliases: Vec<String>,
     /// Correzioni imparate nel tutorial: [sentito, voluto].
     corrections: Vec<(String, String)>,
+    /// Frasi scritte dall'utente da far imparare a Whisper ("Apri SmileSync").
+    custom_phrases: Vec<String>,
 }
 
 impl Default for Settings {
@@ -104,6 +108,7 @@ impl Default for Settings {
             keys_onboarded: false,
             wake_aliases: Vec::new(),
             corrections: Vec::new(),
+            custom_phrases: Vec::new(),
         }
     }
 }
@@ -150,9 +155,11 @@ fn save_settings(
         || !(1.0..=10.0).contains(&settings.idle_seconds)
         || settings.wake_aliases.len() > 8
         || settings.corrections.len() > 64
+        || settings.custom_phrases.len() > MAX_CUSTOM_PHRASES
         || settings
             .wake_aliases
             .iter()
+            .chain(&settings.custom_phrases)
             .chain(settings.corrections.iter().flat_map(|(heard, meant)| [heard, meant]))
             .any(|text| text.len() > 120)
     {
@@ -696,6 +703,7 @@ pub fn run() {
             wake::end_session,
             wake::record_sample,
             apps::open_app,
+            apps::close_app,
             apps::list_apps,
             chat::interpret,
             deepgram::deepgram_key_configured,

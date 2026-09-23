@@ -77,6 +77,8 @@ export interface Settings {
   wakeAliases: string[];
   /** Correzioni imparate nel tutorial: [sentito, voluto]. */
   corrections: [string, string][];
+  /** Frasi scritte dall'utente da far imparare a Whisper (max 50). */
+  customPhrases: string[];
 }
 
 export function getSettings(): Promise<Settings> {
@@ -144,6 +146,11 @@ export interface ToolCall {
 /** Apre un'app del menu Start dal nome detto (anche un po' storpiato da Whisper). */
 export function openApp(name: string): Promise<string> {
   return invoke<string>('open_app', { name });
+}
+
+/** Chiude le finestre aperte di un'app (titolo che finisce col nome o programma omonimo). */
+export function closeApp(name: string): Promise<string> {
+  return invoke<string>('close_app', { name });
 }
 
 /** Nomi delle app del menu Start. */

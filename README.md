@@ -35,7 +35,7 @@ Dici «Hey Jev»: un’isola nera stile Dynamic Island cola giù dall’alto, ti
 1. Scarica `HeyJev_<versione>_x64-setup.exe` dall’**[ultima release](https://github.com/ReflexDesigns/Ehi-Jev/releases/latest)**.
 2. Avvialo: si installa per il tuo utente, senza permessi di amministratore. Windows SmartScreen può avvisare che l’editore è sconosciuto (l’installer non ha una firma Authenticode): **Ulteriori informazioni → Esegui comunque**.
 3. Al primo avvio una **procedura guidata** ti fa creare e incollare le chiavi, una alla volta, con il link alla pagina giusta: **Deepgram** (ascolto e voce, credito gratuito all’iscrizione), **Jev** (esegue i comandi detti a modo tuo) e **OpenRouter** (documenti e siti). Ogni chiave viene verificata prima di essere salvata; puoi saltarle e rifarlo da **Impostazioni → Chiavi**. Senza chiavi HeyJev funziona lo stesso, offline, con i comandi diretti.
-4. Poi parte il **tutorial voce**.
+4. Poi, **prima di iniziare**, dici «Hey Jev» cinque volte: HeyJev impara come lo dici (**Registra voce**).
 
 Requisiti: Windows 10/11 x64, microfono, WebView2 (già presente su Windows 11).
 
@@ -50,6 +50,7 @@ Dopo «Hey Jev» HeyJev resta in ascolto ed esegue ogni frase appena fai una pau
 | «Apri Claude» / «Apri ChatGPT» | «Open Claude», «Apri GPT» | Il sito nel browser predefinito |
 | «Mostra desktop» | «Show desktop», «Mostra scrivania» | **Win + D** |
 | «Chiudi questo» | «Chiudi la finestra», «Close this» | Chiude la finestra che era attiva quando hai chiamato HeyJev (mai HeyJev né il desktop) |
+| «Chiudi Chrome» | «Chiudi Word», «Chiudi il blocco note» | Chiude le finestre aperte di quell’app, come Alt+F4 (i documenti non salvati te li chiede l’app) |
 | «Crea un documento su …» | «Scrivimi un file / una relazione / un articolo…» | Documento `.md` (o `.txt`) in **Download** |
 | «Crea un sito / un MVP / un’app …» | «Preparami una landing / un prototipo…» | Progetto in `C:\Users\<tu>\<nome-progetto>` |
 | «Controlla aggiornamenti» | «Check for updates» | Cerca una nuova versione; si installa solo dopo il tuo clic |
@@ -58,13 +59,16 @@ Dopo «Hey Jev» HeyJev resta in ascolto ed esegue ogni frase appena fai una pau
 
 **Richieste all’AI**: dopo «crea un documento/sito…» tutto quello che dici fino a «grazie» (o al silenzio) diventa la richiesta. Il lavoro va avanti in background: l’isola e la notifica ti dicono quando è pronto.
 
-## Il tutorial voce
+## Registra voce
 
-Ognuno dice «Hey Jev» a modo suo, e il rilevatore offline è addestrato sull’inglese. Il tutorial (al primo avvio, o **Impostazioni → Tutorial voce**) ti fa dire «Hey Jev» tre volte e leggere frasi in italiano e in inglese, tra cui i nomi di un paio delle tue app. HeyJev confronta quello che sente con quello che era scritto e impara:
+Ognuno dice «Hey Jev» a modo suo, e il rilevatore offline è addestrato sull’inglese. **Registra voce** (al primo avvio, o **Impostazioni → Registra voce**) ti fa dire «Hey Jev» cinque volte e impara:
 
-- **come ti chiama**: se il rilevatore non ti riconosce sempre, attiva un ascolto di riserva che riconosce la tua «Hey Jev» così come la sente Whisper;
-- **le correzioni**: se per esempio sente «Smile Sink» quando dici «SmileSync», da lì in poi corregge da solo;
+- **come ti chiama**: se il rilevatore non ti riconosce sempre, attiva un ascolto di riserva che riconosce la tua «Hey Jev» così come la pronunci tu;
 - **il volume della tua voce**: regola la sensibilità del microfono.
+
+Con **Whisper** (offline, senza Deepgram) leggi anche i comandi più comuni (apri e chiudi Chrome, Word, Excel, Blocco note…) e **quelle che scrivi tu**, per esempio i nomi delle app che non capisce: se sente «Smile Sink» quando dici «SmileSync», da lì in poi corregge da solo. Passando da Deepgram a Whisper nelle Impostazioni, la registrazione completa parte da sola.
+
+In **Impostazioni → Parole imparate** vedi cosa ha imparato (e togli quello che non ti piace) e insegni una parola nuova al volo: la scrivi, premi Registra, la dici.
 
 Tutto resta sul tuo PC, in `%APPDATA%\com.heyjev.app\settings.json`.
 
@@ -78,7 +82,7 @@ Clic sull’icona nella system tray (o tasto destro → **Impostazioni…**):
 - **Chiave Deepgram** ([console.deepgram.com](https://console.deepgram.com)): ascolto in streaming (nova-3, italiano) e voce Aura 2 Maia;
 - **Chiave Jev** ([typesafe.ai](https://docs.typesafe.ai/api)): Jev, il modello System One di TypeSafe, sceglie in circa 0,4 s il comando e l’app per le frasi dette a modo tuo;
 - **Chiave OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/keys)): documenti (Gemini Flash) e siti (DeepSeek Flash); Gemini 3.5 Flash-Lite fa anche da riserva se Jev non risponde. Si paga a consumo su OpenRouter;
-- **Chiavi** (procedura guidata), tutorial voce e controllo aggiornamenti.
+- **Chiavi** (procedura guidata), **Registra voce**, **Parole imparate** e controllo aggiornamenti.
 
 Le chiavi vengono verificate prima del salvataggio.
 

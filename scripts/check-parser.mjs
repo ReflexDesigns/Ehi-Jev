@@ -39,6 +39,10 @@ const cases = {
   "Apri l'app Spotify e poi mostra desktop.": ['open_app:spotify', 'show_desktop'],
   'Open Visual Studio Code please': ['open_app:visual studio code'],
   'Apri terminale e poi apri Esplora file.': ['open_terminal', 'open_app:esplora file'],
+  'Chiudi Chrome.': ['close_app:chrome'],
+  'Chiudi il blocco note, grazie.': ['close_app:blocco note', 'cancel'],
+  'Apri Word e chiudi Excel.': ['open_app:word', 'close_app:excel'],
+  'Chiudi questa finestra.': ['close_current'],
   // Parole storpiate da Whisper tiny (reali e dal confronto modelli).
   'Amnula.': ['cancel'],
   'Anula.': ['cancel'],
@@ -92,7 +96,12 @@ assert.deepEqual(noisy.wakeAliases, ['ehi jeff']);
 assert.deepEqual(noisy.corrections, []);
 assert.deepEqual(buildProfile([{ expected: 'Hey Jev', wake: true, sample: sample('Hey Jev', true, 2) }]).profile, {
   wakeAliases: [],
-  corrections: [],
-  micSensitivity: 5,
+  micSensitivity: 5, // voce appena sopra il rumore: sensibilità massima; niente frasi → correzioni intatte
 });
+const wakeOnly = buildProfile([
+  { expected: 'Hey Jev', wake: true, sample: sample('Hey Jev.', true) },
+  { expected: 'Hey Jev', wake: true, sample: sample('E Jev.', false) },
+]).profile;
+assert.equal('corrections' in wakeOnly, false); // con Deepgram si registra solo "Hey Jev"
+assert.deepEqual(wakeOnly.wakeAliases, ['hey jev', 'e jev']);
 console.log('imprinting ok');

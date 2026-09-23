@@ -104,18 +104,20 @@ export function buildProfile(results: TutorialResult[]) {
   const likeJev = (alias: string) => words(alias).some((w) => /^(?:d?j|g)e(?:v+|f+|b)$/.test(w));
   const wakeAliases =
     wakeHits < wake.length ? [...new Set(wake.map((r) => words(r.sample.text).join(' ')))].filter(likeJev).slice(0, 8) : [];
+  const phrases = results.filter((r) => !r.wake);
   const learned = new Map<string, string>();
-  for (const r of results.filter((r) => !r.wake)) {
+  for (const r of phrases) {
     for (const [heard, meant] of learn(r.expected, r.sample.text)) learned.set(heard, meant);
   }
   const corrections = [...learned].slice(0, 64) as Correction[];
   // Sensibilità meno alta che lascia la voce almeno 3 volte sopra la soglia.
   const snr = Math.min(...results.map((r) => r.sample.snr));
   const level = VAD_RATIOS.findIndex((ratio) => snr >= ratio * 3);
-  const profile: Pick<Settings, 'wakeAliases' | 'corrections'> & Partial<Pick<Settings, 'micSensitivity'>> = {
+  const profile: Pick<Settings, 'wakeAliases'> & Partial<Pick<Settings, 'micSensitivity' | 'corrections'>> = {
     wakeAliases,
-    corrections,
   };
+  // Solo "Hey Jev" (Deepgram): le correzioni imparate per Whisper restano com'erano.
+  if (phrases.length) profile.corrections = corrections;
   if (results.length) profile.micSensitivity = level < 0 ? 5 : level + 1; // tutto saltato: resta com'era
   return { profile, wakeHits, wakeTotal: wake.length };
 }

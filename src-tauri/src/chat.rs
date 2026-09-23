@@ -53,6 +53,7 @@ fn tool(name: &str, description: &str, parameter: Option<(&str, &str)>) -> Value
 fn tools() -> Value {
     json!([
         tool("open_app", "Apre un'app installata.", Some(("name", "Nome esatto dell'app, dalla lista delle app installate."))),
+        tool("close_app", "Chiude un'app aperta.", Some(("name", "Nome esatto dell'app, dalla lista delle app installate."))),
         tool("open_terminal", "Apre il terminale di Windows.", None),
         tool("open_claude", "Apre Claude nel browser.", None),
         tool("open_chatgpt", "Apre ChatGPT nel browser.", None),
@@ -99,8 +100,9 @@ async fn choose(app: &AppHandle, text: &str) -> Result<Vec<String>, String> {
 }
 
 /// Azioni tra cui sceglie Jev (nome strumento, quando sceglierla).
-const ACTIONS: [(&str, &str); 11] = [
-    ("open_app", "Aprire, avviare o far partire un'app o un programma installato."),
+const ACTIONS: [(&str, &str); 12] = [
+    ("open_app", "Aprire, avviare, lanciare, far partire o mettere su un'app o un programma."),
+    ("close_app", "Chiudere, spegnere, togliere o levare di torno un'app o un programma nominandolo."),
     ("open_terminal", "Aprire il terminale o il prompt dei comandi."),
     ("open_claude", "Aprire Claude."),
     ("open_chatgpt", "Aprire ChatGPT."),
@@ -161,7 +163,7 @@ async fn jev_choose(key: &str, text: &str) -> Result<Vec<(String, Value)>, Strin
         },
         "app": {
             "type": "choice",
-            "instructions": "Se la frase chiede di aprire un'app, quale di queste? Altrimenti none.",
+            "instructions": "Se la frase chiede di aprire o chiudere un'app, quale di queste? Altrimenti none.",
             "criteria": apps
         }
     });
@@ -178,8 +180,8 @@ fn pick(answers: &Value, text: &str) -> (String, Value) {
     let (name, args) = match action {
         _ if !sure && app_sure => ("open_app", json!({ "name": app })),
         _ if !sure => ("not_a_command", json!({})),
-        "open_app" if app == "none" => ("not_a_command", json!({})),
-        "open_app" => ("open_app", json!({ "name": app })),
+        "open_app" | "close_app" if app == "none" => ("not_a_command", json!({})),
+        "open_app" | "close_app" => (action, json!({ "name": app })),
         // La frase intera è la richiesta: il modello che scrive ignora il "creami…".
         "create_document" | "create_website" => (action, json!({ "request": text })),
         known if ACTIONS.iter().any(|(name, _)| *name == known) => (known, json!({})),
@@ -270,6 +272,8 @@ mod jev_eval {
             ("Preparami una landing page per il mio studio dentistico", "create_website", ""),
             ("Metti su SmileSync", "open_app", "SmileSync"),
             ("Vorrei lavorare sul gestionale dell'officina", "open_app", "PitStop Workshop Manager"),
+            ("Chiudi Chrome", "close_app", "Google Chrome"),
+            ("Levami di torno la calcolatrice", "close_app", "Calcolatrice"),
         ];
         let key = crate::jev_key().expect("chiave Jev nel Credential Manager");
         let apps = ["Spotify", "Calcolatrice", "Esplora file", "SmileSync", "PitStop Workshop Manager", "Google Chrome"];
@@ -282,7 +286,7 @@ mod jev_eval {
             super::ACTIONS.iter().map(|(n, a)| (n.to_string(), serde_json::json!(a))).collect();
         let questions = serde_json::json!({
             "action": { "type": "choice", "instructions": "Frase detta a voce all'assistente di un PC Windows: che azione chiede?", "criteria": actions },
-            "app": { "type": "choice", "instructions": "Se la frase chiede di aprire un'app, quale di queste? Altrimenti none.", "criteria": criteria }
+            "app": { "type": "choice", "instructions": "Se la frase chiede di aprire o chiudere un'app, quale di queste? Altrimenti none.", "criteria": criteria }
         });
         let (mut ok, mut times) = (0, Vec::new());
         for (text, action, app) in cases {

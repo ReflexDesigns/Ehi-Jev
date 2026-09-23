@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getSettings, listApps, recordSample, saveSettings } from '../lib/osControl';
+import { deepgramKeyConfigured, getSettings, recordSample, saveSettings } from '../lib/osControl';
 import { buildProfile, type TutorialResult } from '../lib/voiceProfile';
 
 interface VoiceTutorialProps {
@@ -13,28 +13,37 @@ interface Step {
   wake: boolean;
 }
 
-const WAKE_TIMES = 3;
-const ITALIAN = ['Apri il terminale', 'Mostra il desktop', 'Crea un documento', 'Apri Esplora file', 'Annulla', 'Grazie'];
-const ENGLISH = ['Open the terminal', 'Show desktop', 'Check for updates', 'Thank you'];
+const WAKE_TIMES = 5; // più campioni = alias più affidabili per il trigger di riserva
+const MAX_OWN = 50; // come MAX_CUSTOM_PHRASES in lib.rs
+/** Frasi comuni a tutti: le app più usate e i comandi base. */
+const COMMON = [
+  'Apri Chrome',
+  'Chiudi Chrome',
+  'Apri Word',
+  'Chiudi Word',
+  'Apri Excel',
+  'Chiudi Excel',
+  'Apri Blocco note',
+  'Chiudi Blocco note',
+  'Mostra il desktop',
+  'Chiudi questa finestra',
+  'Apri Esplora file',
+  'Crea un documento',
+  'Annulla',
+  'Grazie',
+];
 const NEXT_MS = 1100; // tempo per leggere cosa ha capito prima della frase successiva
 
-/** Due app installate con nomi brevi: i nomi propri sono quelli che Whisper sbaglia di più. */
-function pickApps(names: string[]): string[] {
-  const usable = [...new Set(names)].filter(
-    (name) =>
-      name.split(/\s+/).length <= 2 &&
-      !/microsoft|windows|guida|help|setup|installer|impostazioni|settings/i.test(name) &&
-      ![...ITALIAN, ...ENGLISH].some((phrase) => phrase.toLowerCase().includes(name.toLowerCase())),
-  );
-  return usable.sort(() => Math.random() - 0.5).slice(0, 2);
-}
-
 /**
- * Tutorial voce (primo avvio, o Impostazioni → Tutorial voce): «Hey Jev» tre volte, poi
- * frasi in italiano e in inglese. HeyJev confronta ciò che sente con ciò che era scritto.
+ * Registra voce (primo avvio, o Impostazioni → Registra voce). Con Deepgram basta «Hey Jev»
+ * 5 volte: il trigger impara come lo dici. Con Whisper anche frasi comuni e quelle scritte
+ * dall'utente: HeyJev confronta ciò che sente con ciò che era scritto e impara le correzioni.
  */
 export default function VoiceTutorial({ onDone, onSkip }: VoiceTutorialProps) {
   const [steps, setSteps] = useState<Step[] | null>(null); // null = introduzione
+  // 'wake' = solo «Hey Jev» (ascolta Deepgram); 'full' = anche le frasi (ascolta Whisper)
+  const [mode, setMode] = useState<'wake' | 'full' | null>(null);
+  const [own, setOwn] = useState(''); // frasi dell'utente, una per riga
   const [index, setIndex] = useState(0);
   const [attempt, setAttempt] = useState(0);
   const [heard, setHeard] = useState('');
@@ -44,13 +53,24 @@ export default function VoiceTutorial({ onDone, onSkip }: VoiceTutorialProps) {
   const done = useRef(onDone);
   done.current = onDone;
 
+  useEffect(() => {
+    Promise.all([getSettings(), deepgramKeyConfigured()]).then(
+      ([settings, deepgram]) => {
+        setMode(settings.recognition === 'deepgram' && deepgram ? 'wake' : 'full');
+        setOwn(settings.customPhrases.join('\n'));
+      },
+      () => setMode('full'),
+    );
+  }, []);
+
   const start = async () => {
-    const apps = pickApps(await listApps().catch(() => []));
-    const phrases = [...ITALIAN, ...apps.map((app) => `Apri ${app}`), ...ENGLISH];
-    setSteps([
-      ...Array.from({ length: WAKE_TIMES }, () => ({ text: 'Hey Jev', wake: true })),
-      ...phrases.map((text) => ({ text, wake: false })),
-    ]);
+    const wake = Array.from({ length: WAKE_TIMES }, () => ({ text: 'Hey Jev', wake: true }));
+    if (mode === 'wake') return setSteps(wake);
+    const mine = [...new Set(own.split('\n').map((line) => line.trim()).filter(Boolean))].slice(0, MAX_OWN);
+    const settings = await getSettings().catch(() => null);
+    if (settings) await saveSettings({ ...settings, customPhrases: mine }).catch(() => undefined);
+    const phrases = [...COMMON, ...mine];
+    setSteps([...wake, ...phrases.map((text) => ({ text, wake: false }))]);
   };
 
   useEffect(() => {
@@ -63,7 +83,8 @@ export default function VoiceTutorial({ onDone, onSkip }: VoiceTutorialProps) {
         .then(() => {
           if (cancelled) return;
           const backup = profile.wakeAliases.length ? ' · attivo anche l’ascolto di riserva' : '';
-          done.current(`Fatto! «Hey Jev» riconosciuta ${wakeHits}/${wakeTotal}${backup} · ${profile.corrections.length} correzioni imparate.`);
+          const learned = profile.corrections ? ` · ${profile.corrections.length} correzioni imparate` : '';
+          done.current(`Fatto! «Hey Jev» riconosciuta ${wakeHits}/${wakeTotal}${backup}${learned}.`);
         })
         .catch((e) => !cancelled && setError(`Salvataggio non riuscito: ${String(e)}`));
       return () => {
@@ -90,15 +111,34 @@ export default function VoiceTutorial({ onDone, onSkip }: VoiceTutorialProps) {
   if (!steps) {
     return (
       <div className="notch-panel">
-        <p>
-          Insegnami la tua voce: dirai «Hey Jev» tre volte e leggerai qualche frase in italiano e in inglese, con il tuo
-          tono normale. Un minuto circa.
-        </p>
+        {mode === 'wake' ? (
+          <p>
+            Prima di iniziare: di’ «Hey Jev» cinque volte, con il tuo tono normale. HeyJev impara come lo dici, così
+            ti sente al primo colpo. Venti secondi.
+          </p>
+        ) : (
+          <>
+            <p>
+              Registra la tua voce per Whisper: dirai «Hey Jev» cinque volte e leggerai i comandi più comuni (apri e
+              chiudi Chrome, Word, Excel…). Aggiungi qui le parole o i nomi di app che non capisce, una per riga: te le
+              farò ripetere.
+            </p>
+            <textarea
+              className="own-phrases"
+              rows={3}
+              spellCheck={false}
+              value={own}
+              onChange={(e) => setOwn(e.target.value)}
+              placeholder={'Apri SmileSync\nApri PitStop'}
+              aria-label="Frasi da insegnare"
+            />
+          </>
+        )}
         <div className="panel-actions">
           <button type="button" className="pill-button secondary" onClick={onSkip}>
             Salta
           </button>
-          <button type="button" className="pill-button" onClick={() => void start()}>
+          <button type="button" className="pill-button" disabled={!mode} onClick={() => void start()}>
             Inizia
           </button>
         </div>

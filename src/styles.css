@@ -208,6 +208,19 @@ body,
   font-size: 12px;
 }
 
+.notch-panel textarea.own-phrases {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--field-line);
+  border-radius: 10px;
+  outline: none;
+  background: var(--field);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  resize: none;
+}
+
 .notch-panel input.wide {
   width: 100%;
 }
@@ -259,6 +272,44 @@ body,
 
 .notch-panel .key-ok {
   color: #30d158;
+}
+
+/* Parole imparate: elenco scorrevole con la ✕ per dimenticarne una. */
+.learned-list {
+  max-height: 120px;
+  margin-bottom: 10px;
+  overflow-y: auto;
+}
+
+.learned-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.learned-row b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.icon-button {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  color: #ff6961;
+}
+
+.notch-panel .learned-message {
+  margin: 8px 0 0;
+  color: var(--text);
 }
 
 /* Tutorial voce: la frase da leggere, grande. */

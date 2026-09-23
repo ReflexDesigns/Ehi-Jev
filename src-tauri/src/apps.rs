@@ -1,8 +1,21 @@
 //! «Apri <app>»: cerca il nome detto tra le app del menu Start e la avvia.
+//! «Chiudi <app>»: chiude le finestre aperte di quell'app (come Alt+F4).
 
-use std::{os::windows::process::CommandExt, process::Command, sync::Mutex, thread};
+use std::{os::windows::process::CommandExt, path::Path, process::Command, sync::Mutex, thread};
 
 use serde_json::Value;
+use tauri::{AppHandle, Manager};
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, HWND, LPARAM},
+    System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    },
+    UI::WindowsAndMessaging::{
+        EnumWindows, GetClassNameW, GetWindow, GetWindowTextW, GetWindowThreadProcessId,
+        IsWindowVisible, PostMessageW, GW_OWNER, SC_CLOSE, WM_SYSCOMMAND,
+    },
+};
 
 use crate::{words, CREATE_NO_WINDOW};
 
@@ -149,6 +162,102 @@ pub fn open_app(name: String) -> Result<String, String> {
     Ok(format!("{title} aperta."))
 }
 
+/// Finestra principale aperta sul desktop.
+struct Window {
+    hwnd: isize,
+    title: String,
+    /// Nome del programma senza estensione, minuscolo ("chrome", "winword").
+    exe: String,
+}
+
+fn exe_name(pid: u32) -> String {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return String::new();
+        }
+        let mut path = [0u16; 260];
+        let mut size = path.len() as u32;
+        let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, path.as_mut_ptr(), &mut size);
+        CloseHandle(process);
+        if ok == 0 {
+            return String::new();
+        }
+        let path = String::from_utf16_lossy(&path[..size as usize]);
+        Path::new(&path)
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    }
+}
+
+unsafe extern "system" fn collect(hwnd: HWND, list: LPARAM) -> i32 {
+    let windows = &mut *(list as *mut Vec<Window>);
+    // Solo finestre principali visibili con un titolo: niente finestrelle di servizio.
+    if IsWindowVisible(hwnd) == 0 || !GetWindow(hwnd, GW_OWNER).is_null() {
+        return 1;
+    }
+    let mut title = [0u16; 256];
+    let length = GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32);
+    let mut class = [0u16; 64];
+    let class_length = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
+    let class = String::from_utf16_lossy(&class[..class_length.max(0) as usize]);
+    if length <= 0 || matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") {
+        return 1;
+    }
+    let mut pid = 0;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    windows.push(Window {
+        hwnd: hwnd as isize,
+        title: String::from_utf16_lossy(&title[..length as usize]),
+        exe: exe_name(pid),
+    });
+    1
+}
+
+fn open_windows() -> Vec<Window> {
+    let mut windows: Vec<Window> = Vec::new();
+    unsafe { EnumWindows(Some(collect), &mut windows as *mut Vec<Window> as LPARAM) };
+    windows
+}
+
+/// La finestra è dell'app nominata? Il titolo deve *finire* col nome ("Nuova scheda - Google
+/// Chrome", "Documento1 - Word"): "Posta in arrivo - Gmail - Google Chrome" non è "Posta".
+/// Oppure il programma si chiama così ("spotify", "winword" per Word).
+fn belongs(window: &Window, names: &[Vec<String>]) -> bool {
+    let title = words(&window.title);
+    names.iter().filter(|name| !name.is_empty()).any(|name| {
+        let joined = name.concat();
+        title.ends_with(name) || (!window.exe.is_empty() && window.exe.ends_with(&joined))
+    })
+}
+
+#[tauri::command]
+pub fn close_app(app: AppHandle, name: String) -> Result<String, String> {
+    // Nome detto e nome vero dal menu Start ("chrome" → "Google Chrome").
+    let resolved = APPS.lock().ok().and_then(|apps| find(&name, &apps)).map(|(title, _)| title);
+    let mut names = vec![words(&name)];
+    if let Some(title) = &resolved {
+        names.push(words(title));
+    }
+    let own = app
+        .get_webview_window("main")
+        .and_then(|window| window.hwnd().ok())
+        .map(|hwnd| hwnd.0 as isize);
+    let label = resolved.unwrap_or_else(|| name.trim().to_string());
+    let targets: Vec<Window> = open_windows()
+        .into_iter()
+        .filter(|window| Some(window.hwnd) != own && belongs(window, &names))
+        .collect();
+    if targets.is_empty() {
+        return Err(format!("Nessuna finestra di {label} aperta."));
+    }
+    for window in &targets {
+        unsafe { PostMessageW(window.hwnd as HWND, WM_SYSCOMMAND, SC_CLOSE as usize, 0) };
+    }
+    Ok(format!("{label} chiusa."))
+}
+
 /// Nomi già in memoria, senza aspettare PowerShell (thread audio, conversazione).
 pub(crate) fn cached() -> Vec<String> {
     APPS.lock()
@@ -169,7 +278,21 @@ pub fn list_apps() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::find;
+    use super::{belongs, find, Window};
+    use crate::words;
+
+    #[test]
+    fn close_matches_the_app_not_a_tab_title() {
+        let window = |title: &str, exe: &str| Window { hwnd: 0, title: title.into(), exe: exe.into() };
+        let chrome = [words("chrome"), words("Google Chrome")];
+        assert!(belongs(&window("Nuova scheda - Google Chrome", "chrome"), &chrome));
+        assert!(belongs(&window("Documento1 - Word", "winword"), &[words("word")]));
+        assert!(belongs(&window("Senza titolo - Blocco note", "notepad"), &[words("blocco note")]));
+        assert!(belongs(&window("Artista - Canzone", "spotify"), &[words("Spotify")]));
+        // "chiudi posta" non chiude la scheda di Gmail in Chrome, "chiudi word" non chiude WordPad.
+        assert!(!belongs(&window("Posta in arrivo - Gmail - Google Chrome", "chrome"), &[words("posta")]));
+        assert!(!belongs(&window("Documento - WordPad", "wordpad"), &[words("word")]));
+    }
 
     #[test]
     fn spoken_names_find_the_right_app() {

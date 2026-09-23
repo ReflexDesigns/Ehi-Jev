@@ -93,6 +93,10 @@ function creation(text: string): { action: string; index: number } | null {
 const OPEN_APP =
   /\b(?:ap+ri|avvia|lancia|open|launch|start)\s+(?:(?:l['’]\s*)?app(?:licazione)?\s+|il\s+programma\s+|l['’]\s*|(?:il|lo|la|i|gli|le|the)\s+)?([^,.;:!?]+?)\s*(?=[,.;:!?]|\s(?:e|ed|and|poi|then|per\s+favore|please|grazie|thanks?)\b|$)/gi;
 
+/** «Chiudi <nome>» che non è «chiudi questo/la finestra»: chiude le finestre di quell'app. */
+const CLOSE_APP =
+  /\b(?:chiudi|close)\s+(?:(?:l['’]\s*)?app(?:licazione)?\s+|il\s+programma\s+|l['’]\s*|(?:il|lo|la|i|gli|le|the)\s+)?([^,.;:!?]+?)\s*(?=[,.;:!?]|\s(?:e|ed|and|poi|then|per\s+favore|please|grazie|thanks?)\b|$)/gi;
+
 /** Parole che chiudono la sessione di ascolto. */
 const STOP = /\b(?:grazie(?:\s*mille)?|silenzio|basta|stop|ok(?:ay)?|annulla|cancel|ciao|thank\s*you)\b/gi;
 
@@ -109,9 +113,11 @@ export function parseCommands(transcript: string): string[] {
       for (const match of text.matchAll(pattern)) found.push({ action: rule.action, index: match.index ?? 0 });
     }
   }
-  for (const match of text.matchAll(OPEN_APP)) {
-    const index = match.index ?? 0;
-    if (!found.some((command) => command.index === index)) found.push({ action: `open_app:${match[1]}`, index });
+  for (const [pattern, action] of [[OPEN_APP, 'open_app'], [CLOSE_APP, 'close_app']] as const) {
+    for (const match of text.matchAll(pattern)) {
+      const index = match.index ?? 0;
+      if (!found.some((command) => command.index === index)) found.push({ action: `${action}:${match[1]}`, index });
+    }
   }
   // Dopo "crea …" il resto è la richiesta per l'AI, non altri comandi.
   const create = creation(text);

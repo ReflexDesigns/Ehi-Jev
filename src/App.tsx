@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import Notch from './components/Notch';
 import SettingsPanel from './components/SettingsPanel';
 import KeysOnboarding from './components/KeysOnboarding';
+import LearnedWords from './components/LearnedWords';
 import VoiceTutorial from './components/VoiceTutorial';
 import { parseCommands } from './lib/commandParser';
 import {
@@ -10,6 +11,7 @@ import {
   aiKeyConfigured,
   deepgramKeyConfigured,
   checkForUpdate,
+  closeApp,
   endSession,
   executeAction,
   getSettings,
@@ -49,11 +51,12 @@ const WAKE_RETRY_MS = 5000; // riavvio del rilevatore dopo un errore microfono
 const LAST_RESULT_MS = 700; // l'ultimo esito resta visibile prima di chiudere
 const NOTICE_MS = 4000; // avviso a fine lavoro AI
 
-type Panel = 'settings' | 'keys' | 'tutorial';
+type Panel = 'settings' | 'keys' | 'tutorial' | 'learned';
 const PANEL_TITLES: Record<Panel, string> = {
   settings: 'Impostazioni',
   keys: 'Chiavi API',
-  tutorial: 'Tutorial voce',
+  tutorial: 'Registra voce',
+  learned: 'Parole imparate',
 };
 /** Strumenti di Jev che corrispondono ad azioni già esistenti. */
 const TOOL_ACTIONS: Record<string, string> = {
@@ -217,6 +220,10 @@ export default function App() {
         report(await openApp(action.slice('open_app:'.length)));
         continue;
       }
+      if (action.startsWith('close_app:')) {
+        report(await closeApp(action.slice('close_app:'.length)));
+        continue;
+      }
       if (action === 'check_update') {
         report(await checkUpdates());
         if (holdRef.current) return;
@@ -231,6 +238,7 @@ export default function App() {
     try {
       if (name in TOOL_ACTIONS) report(await executeAction(TOOL_ACTIONS[name]));
       else if (name === 'open_app') report(await openApp(args.name ?? ''));
+      else if (name === 'close_app') report(await closeApp(args.name ?? ''));
       else if (name === 'check_updates') report(await checkUpdates());
       else if (name === 'create_document' || name === 'create_website') {
         const kind = name === 'create_document' ? 'create_document' : 'create_project';
@@ -310,7 +318,8 @@ export default function App() {
       await setListening(true);
       setUpdateAvailable(null);
       setPanel(next);
-      applyState(next === 'tutorial' ? 'listening' : 'setup');
+      // Dove si registra la voce l'onda segue il microfono.
+      applyState(next === 'tutorial' || next === 'learned' ? 'listening' : 'setup');
       setStatus(PANEL_TITLES[next]);
     } catch (error) {
       setStatus(`Impossibile aprire ${PANEL_TITLES[next]}: ${String(error)}`);
@@ -461,9 +470,22 @@ export default function App() {
           onCheckUpdate={() => void checkUpdatesFromSettings()}
           onTutorial={() => void openPanel('tutorial')}
           onKeys={() => void openPanel('keys')}
+          onLearned={() => void openPanel('learned')}
+          onWhisperChosen={() => {
+            void getSettings().then(loadCorrections, () => undefined);
+            void openPanel('tutorial');
+          }}
         />
       ) : null}
       {panel === 'keys' ? <KeysOnboarding onDone={(summary) => void finishKeys(summary)} /> : null}
+      {panel === 'learned' ? (
+        <LearnedWords
+          onClose={() => {
+            void getSettings().then(loadCorrections, () => undefined);
+            void close();
+          }}
+        />
+      ) : null}
       {panel === 'tutorial' ? (
         <VoiceTutorial onDone={(summary) => void finishTutorial(summary)} onSkip={() => void skipTutorial()} />
       ) : null}
