@@ -60,6 +60,10 @@ const ENTER = /(?:premi invio|e invia|dai invio|e invio|e avvio|press enter)[\s.
 /** Fermano lo spegnimento del PC in attesa, anche storpiate («a nulla», «nulla» tagliato
  *  dopo la wake word): meglio un PC acceso per sbaglio che uno spento per sbaglio. */
 const ABORT = /\b(?:(?:a\s*)?n+ul+[aeio]\w*|cancel\w*|stop|basta|no|ferm[aio]\w*|aspetta)\b/i;
+/** Risposte all'aggiornamento proposto («lo installo?»). Il no vince sul sì. */
+const LATER = /\b(?:no|non\s+ora|pi[uù]\s+tardi|dopo|lascia|annulla|later|not\s+now)\b/i;
+// Mai «installo»/«aggiornamento»: li dice Maia, un'eco sfuggita installerebbe da sola.
+const INSTALL = /\b(?:s[iì]|aggiorna(?:la|lo)?|installa(?:la|lo)?|procedi|vai|ok(?:ay)?|conferma|certo|update|install|yes)\b/i;
 
 type Panel = 'settings' | 'keys' | 'tutorial' | 'learned';
 const PANEL_TITLES: Record<Panel, string> = {
@@ -91,6 +95,7 @@ export default function App() {
   const sessionRef = useRef(false); // sessione di ascolto Rust attiva
   const busyRef = useRef(0); // comandi in esecuzione
   const holdRef = useRef(false); // pannello aperto: non chiudere da soli
+  const updateRef = useRef(false); // aggiornamento proposto: aspetta «aggiorna» o «più tardi»
   const draftRef = useRef<{ kind: string; text: string } | null>(null); // richiesta AI in dettatura
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   const toolsRef = useRef<Promise<void>>(Promise.resolve()); // strumenti scelti da Jev
@@ -111,6 +116,7 @@ export default function App() {
   /** Chiusura: la pillola si restringe e risale, poi click-through. */
   const close = useCallback(async () => {
     holdRef.current = false;
+    updateRef.current = false;
     setPanel(null);
     setUpdateAvailable(null);
     applyState('closing');
@@ -154,34 +160,62 @@ export default function App() {
     queueRef.current = queueRef.current.then(() => {
       sessionRef.current = false;
       submitDraft();
+      if (updateRef.current) {
+        // Aggiornamento ancora da decidere: restano i pulsanti, e «Hey Jev, aggiorna».
+        if (stateRef.current === 'listening') applyState('done');
+        void setWakeEnabled(true);
+      }
       if (holdRef.current) return;
       window.setTimeout(() => {
         // Non chiudere un avviso AI o una nuova sessione nati nel frattempo.
         if (stateRef.current === 'listening' && !sessionRef.current) void close();
       }, LAST_RESULT_MS);
     });
-  }, [close, submitDraft]);
-
-  /** Pannelli che richiedono l'utente: ferma la sessione e tiene aperto il notch. */
-  const hold = useCallback(async (next: AppState) => {
-    holdRef.current = true;
-    if (sessionRef.current) await endSession();
-    sessionRef.current = false;
-    applyState(next);
-  }, [applyState]);
+  }, [applyState, close, submitDraft]);
 
   const checkUpdates = useCallback(async () => {
     setStatus('Controllo aggiornamenti…');
     try {
       const available = await checkForUpdate();
       if (!available) return 'HeyJev è aggiornata.';
-      await hold('done');
+      // Resta aperto (e in ascolto, se lo era): si risponde a voce o con i pulsanti.
+      holdRef.current = true;
+      updateRef.current = true;
       setUpdateAvailable(available);
-      return `È disponibile HeyJev ${available.version}. Conferma con il pulsante per installarla.`;
+      if (!sessionRef.current) {
+        applyState('done');
+        void setWakeEnabled(true);
+        return `È disponibile HeyJev ${available.version}: pulsante, o «Hey Jev, aggiorna».`;
+      }
+      void speak('È disponibile un aggiornamento: lo installo?');
+      return `È disponibile HeyJev ${available.version}: di' «aggiorna» o «più tardi».`;
     } catch (error) {
       return `Errore: ${String(error)}`;
     }
-  }, [hold]);
+  }, [applyState]);
+
+  /** «Aggiorna» o il pulsante: scarica, verifica la firma e installa (HeyJev si riavvia). */
+  const installUpdate = useCallback(async () => {
+    updateRef.current = false;
+    if (sessionRef.current) await endSession();
+    setUpdateAvailable(null);
+    applyState('processing');
+    setStatus('Download e verifica firma…');
+    try {
+      await installPendingUpdate();
+      setStatus('Aggiornamento installato.');
+    } catch (error) {
+      setStatus(`Aggiornamento non riuscito: ${String(error)}`);
+      applyState('done');
+      window.setTimeout(() => void close(), 4000);
+    }
+  }, [applyState, close]);
+
+  /** «Più tardi» o il pulsante. */
+  const dismissUpdate = useCallback(async () => {
+    if (sessionRef.current) await endSession();
+    void close();
+  }, [close]);
 
   /** Esito a schermo. Laconico: a voce (`say`) solo errori e avvisi (l'app che si apre è già la risposta). */
   const report = useCallback((message: string) => setStatus(message), []);
@@ -198,6 +232,8 @@ export default function App() {
       say('Annullato.');
       return;
     }
+    if (updateRef.current && LATER.test(transcript)) return dismissUpdate();
+    if (updateRef.current && INSTALL.test(transcript)) return installUpdate();
     let actions = parseCommands(transcript);
     const draft = draftRef.current;
     if (draft && /^\W*annulla\b/i.test(transcript)) {
@@ -283,7 +319,7 @@ export default function App() {
       }
       report(await executeAction(action));
     }
-  }, [checkUpdates, report, say]);
+  }, [checkUpdates, dismissUpdate, installUpdate, report, say]);
 
   /** Strumento scelto da Jev: si esegue subito, fuori dalla coda delle frasi. */
   const runTool = useCallback(async ({ name, args }: ToolCall) => {
@@ -324,7 +360,8 @@ export default function App() {
   }, [say, runCommands]);
 
   const onWakeWord = useCallback(async () => {
-    if (stateRef.current !== 'idle') return;
+    // Anche con l'aggiornamento proposto a schermo: «Hey Jev, aggiorna».
+    if (stateRef.current !== 'idle' && !(updateRef.current && stateRef.current === 'done')) return;
     sessionRef.current = true;
     draftRef.current = null;
     typedRef.current = false;
@@ -442,20 +479,6 @@ export default function App() {
     }
   }, [applyState, checkUpdates, close]);
 
-  const installUpdate = useCallback(async () => {
-    setUpdateAvailable(null);
-    applyState('processing');
-    setStatus('Download e verifica firma…');
-    try {
-      await installPendingUpdate();
-      setStatus('Aggiornamento installato.');
-    } catch (error) {
-      setStatus(`Aggiornamento non riuscito: ${String(error)}`);
-      applyState('done');
-      window.setTimeout(() => void close(), 4000);
-    }
-  }, [applyState, close]);
-
   // Eventi del backend nativo e della system tray.
   useEffect(() => {
     let disposed = false;
@@ -518,7 +541,7 @@ export default function App() {
       updateAvailable={updateAvailable}
       onActivate={() => void activateWakeWord()}
       onInstallUpdate={() => void installUpdate()}
-      onDismissUpdate={() => void close()}
+      onDismissUpdate={() => void dismissUpdate()}
     >
       {panel === 'settings' ? (
         <SettingsPanel

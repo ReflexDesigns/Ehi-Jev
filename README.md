@@ -56,7 +56,7 @@ Dopo «Hey Jev» HeyJev resta in ascolto ed esegue ogni frase appena fai una pau
 | «Premi invio» / «Clicca su uguale» | «Premi il tasto tab», «Salva con control S» | Preme il tasto (o la scorciatoia) nella stessa finestra di «Scrivi» |
 | «Crea un documento su …» | «Scrivimi un file / una relazione / un articolo…» | Documento `.md` (o `.txt`) in **Download** |
 | «Crea un sito / un MVP / un’app …» | «Preparami una landing / un prototipo…» | Progetto in `C:\Users\<tu>\<nome-progetto>` |
-| «Controlla aggiornamenti» | «Check for updates» | Cerca una nuova versione; si installa solo dopo il tuo clic |
+| «Controlla aggiornamenti» | «Check for updates» | Cerca una nuova versione e resta in ascolto: «aggiorna» (o il pulsante) la installa, «più tardi» rimanda |
 | «Spegni il PC» / «Riavvia il PC» | «Spegni il computer», «Restart the computer» | Te lo dice e aspetta 15 secondi: «annulla» (o «no», «ferma», «stop») lo ferma. Un’app con lavoro non salvato blocca lo spegnimento |
 | «Grazie» / «Silenzio» | «Ok», «Basta», «Stop», «Thank you» | Chiude l’ascolto |
 | Qualsiasi altra frase | «Fammi vedere il desktop», «Metti su SmileSync», «Apri la calcolatrice e fai 2500 più 3850» | Jev sceglie il comando giusto; se servono più azioni in fila, testo o tasti decide Gemini. Se non è un comando (es. «che circonferenza ha la Terra?») non fa niente |
