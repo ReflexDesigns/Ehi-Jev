@@ -155,7 +155,7 @@ pub fn open_app(name: String) -> Result<String, String> {
             found.ok_or_else(|| format!("Non trovo l'app «{}».", name.trim()))?
         }
     };
-    crate::opening();
+    crate::opening(Some(&title));
     Command::new("explorer.exe")
         .arg(format!("shell:AppsFolder\\{id}"))
         .spawn()
@@ -220,6 +220,17 @@ fn open_windows() -> Vec<Window> {
     let mut windows: Vec<Window> = Vec::new();
     unsafe { EnumWindows(Some(collect), &mut windows as *mut Vec<Window> as LPARAM) };
     windows
+}
+
+/// Le finestre principali aperte adesso: quella che compare dopo «apri X» è di X.
+pub(crate) fn window_handles() -> Vec<isize> {
+    open_windows().into_iter().map(|window| window.hwnd).collect()
+}
+
+/// Una finestra già aperta dell'app ("Calcolatrice"), se c'è.
+pub(crate) fn window_of(app: &str) -> Option<isize> {
+    let names = [words(app)];
+    open_windows().into_iter().find(|window| belongs(window, &names)).map(|window| window.hwnd)
 }
 
 /// La finestra è dell'app nominata? Il titolo deve *finire* col nome ("Nuova scheda - Google

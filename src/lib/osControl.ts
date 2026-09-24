@@ -180,6 +180,11 @@ export function typeText(text: string): Promise<string> {
   return invoke<string>('type_text', { text });
 }
 
+/** «Premi invio», «clicca su uguale», «ctrl+s»: un tasto nella stessa finestra di «scrivi». */
+export function pressKeys(keys: string): Promise<string> {
+  return invoke<string>('press_keys', { keys });
+}
+
 /** Nomi delle app del menu Start. */
 export function listApps(): Promise<string[]> {
   return invoke<string[]>('list_apps');

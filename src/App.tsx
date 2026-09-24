@@ -27,6 +27,7 @@ import {
   showWindow,
   speak,
   typeText,
+  pressKeys,
   webSearch,
   startWakeListener,
   type Settings,
@@ -197,7 +198,7 @@ export default function App() {
       say('Annullato.');
       return;
     }
-    const actions = parseCommands(transcript);
+    let actions = parseCommands(transcript);
     const draft = draftRef.current;
     if (draft && /^\W*annulla\b/i.test(transcript)) {
       // «Annulla» durante una dettatura la butta, non la manda all'AI.
@@ -213,14 +214,16 @@ export default function App() {
       if (actions[actions.length - 1] === 'cancel') await endSession();
       return;
     }
-    if (!actions.length) {
-      // Il parser non la riconosce: Jev sceglie azione e app (app:tool → runTool).
+    if (!actions.length || actions[0] === 'interpret') {
+      // Il parser non la riconosce, o ne avanza un pezzo: Jev sceglie, Gemini se servono più
+      // azioni, testo o tasti (app:tool → runTool).
       try {
         setStatus(transcript);
         await interpret(transcript);
         return;
       } catch {
-        // Né Jev né Gemini configurati o raggiungibili: frase non riconosciuta.
+        // Né Jev né Gemini configurati o raggiungibili: restano i comandi riconosciuti.
+        actions = actions.filter((action) => action !== 'interpret');
       }
     }
     if (!actions.length) {
@@ -268,6 +271,11 @@ export default function App() {
         typedRef.current = !ENTER.test(text);
         continue;
       }
+      if (action.startsWith('press_keys:')) {
+        report(await pressKeys(action.slice('press_keys:'.length)));
+        typedRef.current = false;
+        continue;
+      }
       if (action === 'check_update') {
         report(await checkUpdates());
         if (holdRef.current) return;
@@ -285,6 +293,7 @@ export default function App() {
       else if (name === 'close_app') report(await closeApp(args.name ?? ''));
       else if (name === 'web_search') report(await webSearch(args.query ?? ''));
       else if (name === 'type_text') report(await typeText(args.text ?? ''));
+      else if (name === 'press_keys') report(await pressKeys(args.keys ?? ''));
       else if (name === 'check_updates') report(await checkUpdates());
       else if (name === 'create_document' || name === 'create_website') {
         const kind = name === 'create_document' ? 'create_document' : 'create_project';

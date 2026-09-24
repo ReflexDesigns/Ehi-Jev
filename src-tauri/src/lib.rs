@@ -28,7 +28,7 @@ use windows_sys::Win32::{
     UI::{
         Input::KeyboardAndMouse::{
             GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-            KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_D, VK_LBUTTON, VK_LWIN, VK_RETURN,
+            KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_D, VK_LBUTTON, VK_LWIN, VK_MENU, VK_RETURN,
         },
         Shell::ShellExecuteW,
         WindowsAndMessaging::{
@@ -183,10 +183,20 @@ fn save_settings(
 
 /// Finestra in primo piano al momento della wake word: bersaglio di «scrivi» e `close_current`.
 static TARGET_WINDOW: AtomicIsize = AtomicIsize::new(0);
-/// App aperta a voce in questa sessione: quando, e la finestra in primo piano prima.
-static OPENED: Mutex<Option<(Instant, isize)>> = Mutex::new(None);
-/// Quanto si aspetta che l'app aperta venga in primo piano.
+/// App aperta a voce in questa sessione.
+struct Opened {
+    since: Instant,
+    /// Finestre già aperte prima: quella nuova è dell'app.
+    before: Vec<isize>,
+    foreground: isize,
+    /// Nome dell'app dal menu Start: se era già aperta, la sua finestra.
+    app: Option<String>,
+}
+static OPENED: Mutex<Option<Opened>> = Mutex::new(None);
+/// Quanto si aspetta la finestra dell'app aperta.
 const OPEN_WAIT: Duration = Duration::from_secs(8);
+/// Nessuna finestra nuova dopo questo: l'app era già aperta, vale la sua finestra.
+const ALREADY_OPEN: Duration = Duration::from_secs(2);
 
 pub(crate) fn remember_foreground_window() {
     TARGET_WINDOW.store(unsafe { GetForegroundWindow() } as isize, Ordering::Release);
@@ -195,26 +205,41 @@ pub(crate) fn remember_foreground_window() {
     }
 }
 
-/// «Apri X»: da qui «scrivi» e «chiudi questo» vanno nella finestra di X.
-pub(crate) fn opening() {
-    if let Ok(mut opened) = OPENED.lock() {
-        *opened = Some((Instant::now(), unsafe { GetForegroundWindow() } as isize));
+/// «Apri X»: da qui «scrivi», «premi» e «chiudi questo» vanno nella finestra di X.
+pub(crate) fn opening(app: Option<&str>) {
+    let opened = Opened {
+        since: Instant::now(),
+        before: apps::window_handles(),
+        foreground: unsafe { GetForegroundWindow() } as isize,
+        app: app.map(str::to_string),
+    };
+    if let Ok(mut slot) = OPENED.lock() {
+        *slot = Some(opened);
     }
 }
 
-/// Bersaglio di «scrivi» e «chiudi questo»: la finestra del «Hey Jev», o quella dell'app
-/// aperta nel frattempo appena arriva in primo piano. Se non arriva (una scheda nel browser
-/// già davanti) resta quella di prima.
+/// Bersaglio di «scrivi», «premi» e «chiudi questo»: la finestra del «Hey Jev», o quella
+/// dell'app aperta a voce. Windows spesso non la porta davanti (misurato con la
+/// Calcolatrice): vale la finestra nuova, o quella che è venuta davanti, o, se l'app era già
+/// aperta, la sua. Se non c'è niente (una scheda nel browser) resta quella di prima.
 fn target_window(own: Option<isize>) -> HWND {
-    if let Some((since, before)) = OPENED.lock().ok().and_then(|mut opened| opened.take()) {
+    if let Some(opened) = OPENED.lock().ok().and_then(|mut opened| opened.take()) {
         loop {
-            let now = unsafe { GetForegroundWindow() } as isize;
-            if now != 0 && now != before && Some(now) != own {
-                TARGET_WINDOW.store(now, Ordering::Release);
+            let foreground = unsafe { GetForegroundWindow() } as isize;
+            let found = apps::window_handles()
+                .into_iter()
+                .find(|window| !opened.before.contains(window) && Some(*window) != own)
+                .or_else(|| (foreground != 0 && foreground != opened.foreground && Some(foreground) != own).then_some(foreground))
+                .or_else(|| {
+                    let app = opened.app.as_deref().filter(|_| opened.since.elapsed() >= ALREADY_OPEN)?;
+                    apps::window_of(app).filter(|window| Some(*window) != own)
+                });
+            if let Some(window) = found {
+                TARGET_WINDOW.store(window, Ordering::Release);
                 thread::sleep(Duration::from_millis(700)); // appena aperta: pronta per i tasti
                 break;
             }
-            if since.elapsed() >= OPEN_WAIT {
+            if opened.since.elapsed() >= OPEN_WAIT {
                 break;
             }
             thread::sleep(Duration::from_millis(100));
@@ -601,7 +626,7 @@ async fn install_pending_update(pending: State<'_, PendingUpdate>) -> Result<(),
 #[tauri::command(async)]
 fn execute_action(app: AppHandle, action: String) -> Result<String, String> {
     if action.starts_with("open_") {
-        opening();
+        opening(None);
     }
     match action.as_str() {
         "open_terminal" => Command::new("wt.exe")
@@ -778,20 +803,7 @@ fn type_text(app: AppHandle, text: String) -> Result<String, String> {
     if text.is_empty() || text.chars().count() > 2_000 {
         return Err("Testo vuoto o troppo lungo.".into());
     }
-    let own = app
-        .get_webview_window("main")
-        .and_then(|window| window.hwnd().ok())
-        .map(|own| own.0 as isize);
-    let target = target_window(own);
-    if target.is_null() || own == Some(target as isize) {
-        return Err("Nessuna finestra in cui scrivere.".into());
-    }
-    unsafe { SetForegroundWindow(target) };
-    thread::sleep(Duration::from_millis(120)); // la finestra riprende il focus prima dei tasti
-    // Windows può negare il primo piano: meglio non scrivere che scrivere altrove.
-    if unsafe { GetForegroundWindow() } != target {
-        return Err("Non riesco a portare davanti la finestra: non scrivo.".into());
-    }
+    focus_target(&app)?;
     let mut inputs = Vec::new();
     for unit in text.encode_utf16() {
         if unit == u16::from(b'\n') {
@@ -811,6 +823,114 @@ fn type_text(app: AppHandle, text: String) -> Result<String, String> {
         return Err("Windows non ha accettato il testo.".into());
     }
     Ok(if enter { "Scritto e inviato." } else { "Scritto." }.into())
+}
+
+/// Porta davanti la finestra di «scrivi»/«premi»: quella del «Hey Jev» o l'app appena aperta.
+fn focus_target(app: &AppHandle) -> Result<(), String> {
+    let own = app
+        .get_webview_window("main")
+        .and_then(|window| window.hwnd().ok())
+        .map(|own| own.0 as isize);
+    let target = target_window(own);
+    if target.is_null() || own == Some(target as isize) {
+        return Err("Nessuna finestra in cui scrivere.".into());
+    }
+    bring_forward(target)
+}
+
+fn bring_forward(target: HWND) -> Result<(), String> {
+    if unsafe { SetForegroundWindow(target) == 0 || GetForegroundWindow() != target } {
+        // Windows nega il primo piano a chi non ha avuto l'ultimo input (anche all'app appena
+        // aperta): lo sblocca un Alt premuto intanto, come fa PowerToys (misurato).
+        let alt = |flags| unsafe { SendInput(1, &keyboard_input(VK_MENU, flags), size_of::<INPUT>() as i32) };
+        alt(0);
+        unsafe { SetForegroundWindow(target) };
+        alt(KEYEVENTF_KEYUP);
+    }
+    thread::sleep(Duration::from_millis(120)); // la finestra riprende il focus prima dei tasti
+    // Windows può negare il primo piano: meglio non scrivere che scrivere altrove.
+    if unsafe { GetForegroundWindow() } != target {
+        return Err("Non riesco a portare davanti la finestra: non scrivo.".into());
+    }
+    Ok(())
+}
+
+/// Un tasto: virtuale (Invio, F5, «s» di Ctrl+S) o un carattere da digitare («=»).
+#[derive(Debug, PartialEq)]
+enum Key {
+    Virtual(u16),
+    Char(u16),
+}
+
+/// "enter", "=", "ctrl+s", "alt+tab", "ctrl++": modificatori e tasto.
+fn parse_keys(keys: &str) -> Option<(Vec<u16>, Key)> {
+    let keys = keys.trim().to_lowercase();
+    let (modifiers, key) = match keys.strip_suffix("++") {
+        Some(modifiers) => (modifiers, "+"),
+        None => keys.rsplit_once('+').filter(|(_, key)| !key.is_empty()).unwrap_or(("", &keys)),
+    };
+    let modifiers = modifiers
+        .split('+')
+        .filter(|name| !name.is_empty())
+        .map(|name| match name.trim() {
+            "ctrl" | "control" | "controllo" => Some(0x11),
+            "alt" => Some(0x12),
+            "shift" | "maiusc" => Some(0x10),
+            "win" | "windows" => Some(VK_LWIN),
+            _ => None,
+        })
+        .collect::<Option<Vec<u16>>>()?;
+    let key = key.trim();
+    let mut chars = key.chars();
+    let key = match (chars.next()?, chars.next()) {
+        (c, None) if c.is_ascii_alphanumeric() => Key::Virtual(c.to_ascii_uppercase() as u16),
+        // ponytail: un simbolo con Ctrl/Alt passa come carattere, alcune app lo ignorano.
+        (c, None) => Key::Char(c.encode_utf16(&mut [0; 2])[0]),
+        _ => match key {
+            "uguale" | "equals" => Key::Char(u16::from(b'=')),
+            "enter" | "invio" | "return" => Key::Virtual(VK_RETURN),
+            "tab" => Key::Virtual(0x09),
+            "esc" | "escape" => Key::Virtual(0x1B),
+            "space" | "spazio" => Key::Virtual(0x20),
+            "backspace" => Key::Virtual(0x08),
+            "delete" | "del" | "canc" => Key::Virtual(0x2E),
+            "up" | "su" => Key::Virtual(0x26),
+            "down" | "giu" | "giù" => Key::Virtual(0x28),
+            "left" | "sinistra" => Key::Virtual(0x25),
+            "right" | "destra" => Key::Virtual(0x27),
+            "home" => Key::Virtual(0x24),
+            "end" | "fine" => Key::Virtual(0x23),
+            "pageup" => Key::Virtual(0x21),
+            "pagedown" => Key::Virtual(0x22),
+            f => match f.strip_prefix('f').and_then(|n| n.parse::<u16>().ok()) {
+                Some(n @ 1..=12) => Key::Virtual(0x6F + n),
+                _ => return None,
+            },
+        },
+    };
+    Some((modifiers, key))
+}
+
+/// «Premi invio», «clicca su uguale», «ctrl+s»: un tasto o una scorciatoia nella stessa
+/// finestra di «scrivi».
+#[tauri::command(async)]
+fn press_keys(app: AppHandle, keys: String) -> Result<String, String> {
+    let (modifiers, key) = parse_keys(&keys).ok_or_else(|| format!("Tasto «{}» sconosciuto.", keys.trim()))?;
+    focus_target(&app)?;
+    let mut inputs: Vec<INPUT> = modifiers.iter().map(|&modifier| keyboard_input(modifier, 0)).collect();
+    inputs.extend(match key {
+        Key::Virtual(code) => [keyboard_input(code, 0), keyboard_input(code, KEYEVENTF_KEYUP)],
+        Key::Char(unit) => [
+            unicode_input(unit, KEYEVENTF_UNICODE),
+            unicode_input(unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP),
+        ],
+    });
+    inputs.extend(modifiers.iter().rev().map(|&modifier| keyboard_input(modifier, KEYEVENTF_KEYUP)));
+    let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
+    if sent as usize != inputs.len() {
+        return Err("Windows non ha accettato il tasto.".into());
+    }
+    Ok(format!("Premuto {}.", keys.trim()))
 }
 
 /// Un carattere qualsiasi (accenti, simboli, emoji) indipendentemente dal layout di tastiera.
@@ -961,6 +1081,7 @@ pub fn run() {
             open_link,
             web_search,
             type_text,
+            press_keys,
             check_for_update,
             install_pending_update,
             ai::ai_create,
@@ -993,6 +1114,42 @@ mod tests {
         assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 48_000);
         assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 6);
         assert_eq!(i16::from_le_bytes([wav[46], wav[47]]), i16::MAX);
+    }
+
+    #[test]
+    fn keys_are_parsed() {
+        use super::{parse_keys, Key, VK_LWIN, VK_RETURN};
+        assert_eq!(parse_keys("enter"), Some((vec![], Key::Virtual(VK_RETURN))));
+        assert_eq!(parse_keys("="), Some((vec![], Key::Char(u16::from(b'=')))));
+        assert_eq!(parse_keys("uguale"), Some((vec![], Key::Char(u16::from(b'=')))));
+        assert_eq!(parse_keys("Ctrl+S"), Some((vec![0x11], Key::Virtual(u16::from(b'S')))));
+        assert_eq!(parse_keys("ctrl++"), Some((vec![0x11], Key::Char(u16::from(b'+')))));
+        assert_eq!(parse_keys("+"), Some((vec![], Key::Char(u16::from(b'+')))));
+        assert_eq!(parse_keys("win+d"), Some((vec![VK_LWIN], Key::Virtual(u16::from(b'D')))));
+        assert_eq!(parse_keys("f5"), Some((vec![], Key::Virtual(0x74))));
+        assert_eq!(parse_keys("f13"), None);
+        assert_eq!(parse_keys("pippo+s"), None);
+        assert_eq!(parse_keys("banana"), None);
+    }
+
+    /// «Apri la calcolatrice e scrivi 2500+3850=» come lo fa HeyJev: la Calcolatrice non viene
+    /// davanti da sola. Il risultato si legge a schermo (o con UI Automation).
+    /// cargo test calculator_live -- --ignored --nocapture
+    #[test]
+    #[ignore = "apre la Calcolatrice sul desktop"]
+    fn calculator_live() {
+        use super::*;
+        opening(Some("Calcolatrice"));
+        Command::new("calc.exe").spawn().unwrap();
+        let target = target_window(None);
+        assert!(!target.is_null(), "finestra della Calcolatrice trovata");
+        bring_forward(target).expect("Calcolatrice in primo piano");
+        let inputs: Vec<INPUT> = "2500+3850="
+            .encode_utf16()
+            .flat_map(|unit| [unicode_input(unit, KEYEVENTF_UNICODE), unicode_input(unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP)])
+            .collect();
+        unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
+        println!("scritto nella finestra {target:?}");
     }
 
     /// Solo i turni, mai `shutdown.exe`: il test non spegne il PC.

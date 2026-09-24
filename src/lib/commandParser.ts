@@ -112,41 +112,144 @@ const SEARCH =
   /\b(?:cerca(?:mi)?|search(?:\s+for)?)\s+(?:su\s+google\s+)?([^,.;:!?]+?)(?:\s+(?:su|on|in)\s+(?:google|internet|web))?\s*(?=[,.;:!?]|$)/gi;
 
 /** «Scrivi <testo>»: tutto quello che segue si digita (dalla frase originale: maiuscole e accenti). */
-const TYPE = /\b(?:scrivi|digita|type)\s+(.+)$/i;
-/** Fine del testo da scrivere: «scrivi X, poi apri Y» continua con altri comandi. */
+const TYPE = /\b(?:scrivi|digit(?:a|i|are)|inserisci|type)\s+(.+)$/i;
+/** Fine del testo da scrivere: «scrivi X, poi apri Y» continua con altri comandi.
+ *  «… e premi invio» in fondo resta del testo: lo gestisce `type_text`. */
 const NEXT =
-  /[\s,;.]+(?:e\s+)?(?:poi|dopo|quindi|e|and|then)\s+(?=(?:ap+ri|avvia|lancia|chiudi|scrivi|digita|cerca|mostra|spegni|riavvia|open|launch|close|type|search|show)\b)/i;
+  /[\s,;.]+(?:e\s+)?(?:poi|dopo|quindi|e|and|then)\s+(?=(?:ap+ri|avvia|lancia|chiudi|scrivi|digit(?:a|i)|inserisci|cerca|mostra|spegni|riavvia|premi(?!\s+invio)|clicca|schiaccia|open|launch|close|type|search|show|press|click)\b)/i;
+
+/** «Premi invio», «clicca su uguale», «schiaccia il tasto tab»: un tasto (press_keys). */
+const PRESS =
+  /\b(?:premi|clicca|schiaccia|pigia|press|click|hit)\s+(?:(?:su|sul|sullo|on)\s+)?(?:(?:il|lo|l['’]|the)\s*)?(?:(?:tasto|pulsante|bottone|key|button)\s+)?(?:(?:di\s+)?(?:il|lo|l['’])\s*)?(invio|enter|ugual[ei]|equals?|tab|esc|escape|spazio|space|canc|backspace)\b/gi;
+/** Come si chiamano i tasti per press_keys in lib.rs. */
+const KEY_NAMES: Record<string, string> = {
+  invio: 'enter',
+  uguale: '=',
+  uguali: '=',
+  equal: '=',
+  equals: '=',
+  spazio: 'space',
+  canc: 'delete',
+  escape: 'esc',
+};
+
+const NUMBER_WORDS = Object.entries({
+  zero: 0, uno: 1, un: 1, due: 2, tre: 3, quattro: 4, cinque: 5, sei: 6, sette: 7, otto: 8, nove: 9,
+  dieci: 10, undici: 11, dodici: 12, tredici: 13, quattordici: 14, quindici: 15, sedici: 16,
+  diciassette: 17, diciotto: 18, diciannove: 19, venti: 20, vent: 20, trenta: 30, trent: 30,
+  quaranta: 40, quarant: 40, cinquanta: 50, cinquant: 50, sessanta: 60, sessant: 60, settanta: 70,
+  settant: 70, ottanta: 80, ottant: 80, novanta: 90, novant: 90, cento: 100, cent: 100,
+  mille: 1000, mila: 1000, milione: 1e6, milioni: 1e6,
+}).sort(([a], [b]) => b.length - a.length);
+
+/** I pezzi di un numero in lettere; "cent" + "ottanta" se "cento" + … non torna. */
+function numberParts(rest: string): number[] | null {
+  if (!rest) return [];
+  for (const [word, value] of NUMBER_WORDS) {
+    const tail = rest.startsWith(word) ? numberParts(rest.slice(word.length)) : null;
+    if (tail) return [value, ...tail];
+  }
+  return null;
+}
+
+/** «duemilacinquecento», «tremila ottocentocinquanta» → "2500", "3850". */
+function spokenNumber(text: string): string | null {
+  const parts = numberParts(text);
+  if (!parts?.length) return null;
+  let [total, current] = [0, 0];
+  for (const value of parts) {
+    if (value === 100) current = (current || 1) * 100;
+    else if (value >= 1000) [total, current] = [total + (current || 1) * value, 0];
+    else current += value;
+  }
+  return String(total + current);
+}
+
+const OPERATORS: Record<string, string> = {
+  '+': '+', piu: '+', '-': '-', meno: '-', '*': '*', x: '*', '×': '*', per: '*', moltiplicato: '*',
+  '/': '/', ':': '/', diviso: '/',
+};
+
+/**
+ * Un conto detto a voce, come si digita nella calcolatrice: «2500 più 3850» e
+ * «duemilacinquecento più tremila ottocentocinquanta» → "2500+3850" (Deepgram scrive i
+ * numeri in lettere). Se non è solo un conto: null, il testo si scrive com'è.
+ */
+export function arithmetic(text: string): string | null {
+  const folded = text.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/(\d)\.(?=\d{3}(?!\d))/g, '$1');
+  const out: string[] = [];
+  let operand: string[] = [];
+  const close = () => {
+    const joined = operand.join('');
+    operand = [];
+    return /^\d+(?:,\d+)?$/.test(joined) ? joined : spokenNumber(joined);
+  };
+  for (const token of folded.match(/\d+(?:,\d+)?|\p{L}+|[+\-*/×:]/gu) ?? []) {
+    const operator = OPERATORS[token];
+    if (!operator) {
+      if (token !== 'e') operand.push(token); // «duemila e cinquecento»
+      continue;
+    }
+    if (!operand.length && token === 'per' && out.length) continue; // «diviso per»
+    const value = close();
+    if (value === null) return null;
+    out.push(value, operator);
+  }
+  const last = close();
+  return last === null || !out.length ? null : [...out, last].join('');
+}
+
+/** Il testo di «scrivi …», o il conto già pronto per la calcolatrice. */
+const typing = (text: string) => `type_text:${arithmetic(text) ?? text}`;
 /** Un «grazie» in fondo è per Jev, non da scrivere. */
 const THANKS = /[\s,.;]+(?:grazie(?:\s+mille)?|thank\s*you)[.!]?\s*$/i;
 
 /** Parole che chiudono la sessione di ascolto. */
 const STOP = /\b(?:grazie(?:\s*mille)?|silenzio|basta|stop|ok(?:ay)?|annulla|cancel|ciao|thank\s*you)\b/gi;
 
+/** Parole che da sole non chiedono niente: se avanza solo questo, i comandi trovati bastano. */
+const FILLER = new Set(
+  'e ed o poi dopo quindi and then per favore piacere please grazie mille thanks thank you ok okay silenzio basta stop ciao annulla cancel puoi potresti mi ti hey ehi jev adesso ora subito'.split(
+    ' ',
+  ),
+);
+
+/** Quante parole della frase nessuna regola ha capito («apri la calcolatrice e *fai 2 più 2*»). */
+function leftover(text: string, spans: { index: number; end: number }[]): number {
+  let rest = text;
+  for (const { index, end } of spans) rest = rest.slice(0, index) + ' '.repeat(end - index) + rest.slice(end);
+  return (rest.replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').match(/\p{L}+|\d+/gu) ?? []).filter((word) => !FILLER.has(word)).length;
+}
+
 /**
  * Estrae tutti i comandi della frase, nell'ordine in cui sono detti.
  * "grazie"/"ok"/"silenzio" chiudono (`cancel`) solo se arrivano dopo l'ultimo
  * comando: "ok, apri terminale" apre il terminale, "apri terminale, grazie" apre e chiude.
+ * Se avanza una parte che nessuna regola capisce, in testa c'è `interpret`: decide l'AI
+ * sulla frase intera, e i comandi trovati restano la riserva se l'AI non c'è.
  */
 export function parseCommands(transcript: string): string[] {
   const text = tolerant(transcript.toLowerCase());
-  const found: { action: string; index: number }[] = [];
+  const found: { action: string; index: number; end: number }[] = [];
+  const add = (action: string, match: RegExpMatchArray) => {
+    const index = match.index ?? 0;
+    if (!found.some((command) => command.index === index)) found.push({ action, index, end: index + match[0].length });
+  };
   for (const rule of RULES) {
     for (const pattern of rule.patterns) {
-      for (const match of text.matchAll(pattern)) found.push({ action: rule.action, index: match.index ?? 0 });
+      for (const match of text.matchAll(pattern)) add(rule.action, match);
     }
   }
   for (const [pattern, action] of [[OPEN_APP, 'open_app'], [CLOSE_APP, 'close_app'], [SEARCH, 'search']] as const) {
-    for (const match of text.matchAll(pattern)) {
-      const index = match.index ?? 0;
-      if (!found.some((command) => command.index === index)) found.push({ action: `${action}:${match[1]}`, index });
-    }
+    for (const match of text.matchAll(pattern)) add(`${action}:${match[1]}`, match);
   }
+  for (const match of text.matchAll(PRESS)) add(`press_keys:${KEY_NAMES[match[1]] ?? match[1]}`, match);
   // Dopo "crea …" il resto è la richiesta per l'AI, non altri comandi.
   const create = creation(text);
   const typed = create ? null : TYPE.exec(text);
   const original = TYPE.exec(transcript);
   if (create) {
-    found.splice(0, found.length, ...found.filter((command) => command.index < create.index), create);
+    found.splice(0, found.length, ...found.filter((command) => command.index < create.index), { ...create, end: text.length });
   } else if (typed && original) {
     // Anche «scrivi apri il terminale» o «scrivi ciao Marco» si scrive e basta: niente
     // comandi né parole di chiusura dentro il testo; chiude solo un «grazie» in fondo.
@@ -154,9 +257,9 @@ export function parseCommands(transcript: string): string[] {
     const next = NEXT.exec(original[1]);
     if (next) {
       const rest = original[1].slice(next.index + next[0].length);
-      return [...before.map((command) => command.action), `type_text:${original[1].slice(0, next.index)}`, ...parseCommands(rest)];
+      return [...before.map((command) => command.action), typing(original[1].slice(0, next.index)), ...parseCommands(rest)];
     }
-    const actions = [...before.map((command) => command.action), `type_text:${original[1].replace(THANKS, '')}`];
+    const actions = [...before.map((command) => command.action), typing(original[1].replace(THANKS, ''))];
     return THANKS.test(original[1]) ? [...actions, 'cancel'] : actions;
   }
   found.sort((a, b) => a.index - b.index);
@@ -164,5 +267,5 @@ export function parseCommands(transcript: string): string[] {
   const lastStop = [...text.matchAll(STOP)].pop()?.index ?? -1;
   const actions = found.map((command) => command.action);
   if (lastStop > lastCommand) actions.push('cancel');
-  return actions;
+  return actions.length && leftover(text, found) >= 2 ? ['interpret', ...actions] : actions;
 }

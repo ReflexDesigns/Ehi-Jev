@@ -1,8 +1,9 @@
 //! Esecutore laconico: le frasi che il parser locale non riconosce vanno a **Jev**
-//! (TypeSafe SystemOne), che sceglie in una sola richiesta l'azione e l'app. Senza chiave
-//! Jev fa da riserva Gemini Flash (OpenRouter) con strumento obbligatorio. Niente
+//! (TypeSafe SystemOne), che sceglie in una sola richiesta l'azione e l'app. Quello che Jev
+//! non sa fare (più azioni in fila, testo da scrivere, tasti) o scarta come non comando lo
+//! decide Gemini Flash-Lite (OpenRouter), che è anche la riserva senza chiave Jev. Niente
 //! conversazione: se non è un comando per il PC, `not_a_command`. Ogni scelta arriva al
-//! frontend come `app:tool` e viene eseguita subito.
+//! frontend come `app:tool` e viene eseguita, in ordine.
 
 use std::{
     sync::{
@@ -24,7 +25,7 @@ const MAX_TURNS: usize = 6;
 static HISTORY: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 static BUSY: AtomicBool = AtomicBool::new(false);
 
-const SYSTEM: &str = "Sei Jev, l'esecutore dei comandi vocali di HeyJev su un PC Windows. Non fai conversazione e non rispondi a domande: traduci la frase dell'utente nello strumento giusto e basta. Se la frase non chiede un'azione sul PC (domande di cultura, calcoli, curiosità, chiacchiere, frasi incomplete) usa not_a_command. Usa create_document o create_website solo se l'utente chiede esplicitamente di creare un documento, un testo, un sito o un'app. Se l'utente saluta, ringrazia o dice basta usa end_conversation.";
+const SYSTEM: &str = "Sei Jev, l'esecutore dei comandi vocali di HeyJev su un PC Windows. Non fai conversazione e non rispondi a domande: traduci la frase dell'utente negli strumenti giusti e basta. Se la frase chiede più azioni usa più strumenti, nell'ordine in cui sono dette: «apri la calcolatrice e fai 2500 più 3850» è open_app Calcolatrice, type_text «2500+3850», press_keys «=». Per scrivere o digitare usa type_text, per premere o cliccare un tasto press_keys. Se la frase non chiede un'azione sul PC (domande di cultura, calcoli senza chiedere di farli su un'app, curiosità, chiacchiere, frasi incomplete) usa not_a_command. Usa create_document o create_website solo se l'utente chiede esplicitamente di creare un documento, un testo, un sito o un'app. Se l'utente saluta, ringrazia o dice basta usa end_conversation.";
 
 /// Nuova sessione («Hey Jev»): si riparte da zero.
 pub(crate) fn reset() {
@@ -55,7 +56,8 @@ fn tools() -> Value {
         tool("open_app", "Apre un'app installata.", Some(("name", "Nome esatto dell'app, dalla lista delle app installate."))),
         tool("close_app", "Chiude un'app aperta.", Some(("name", "Nome esatto dell'app, dalla lista delle app installate."))),
         tool("web_search", "Cerca su Google.", Some(("query", "Cosa cercare."))),
-        tool("type_text", "Scrive un testo nella finestra in primo piano.", Some(("text", "Il testo da scrivere, esattamente come detto."))),
+        tool("type_text", "Scrive un testo nella finestra in primo piano (o nell'app appena aperta).", Some(("text", "Il testo da scrivere, esattamente come detto; numeri e operazioni in cifre e simboli (2500+3850)."))),
+        tool("press_keys", "Preme un tasto o una scorciatoia nella finestra in primo piano (o nell'app appena aperta).", Some(("keys", "Un tasto o una combinazione: enter, tab, esc, =, up, f5, ctrl+s, alt+tab…"))),
         tool("open_terminal", "Apre il terminale di Windows.", None),
         tool("open_claude", "Apre Claude nel browser.", None),
         tool("open_chatgpt", "Apre ChatGPT nel browser.", None),
@@ -88,6 +90,7 @@ async fn choose(app: &AppHandle, text: &str) -> Result<Vec<String>, String> {
         Some(key) => race(&key, text).await?,
         None => gemini_choose(text).await?,
     };
+    // Il frontend le esegue in ordine: «apri X e scrivi Y» scrive nella finestra di X.
     for (name, args) in &calls {
         let _ = app.emit("app:tool", json!({ "name": name, "args": args }));
     }
@@ -102,7 +105,7 @@ async fn choose(app: &AppHandle, text: &str) -> Result<Vec<String>, String> {
 }
 
 /// Azioni tra cui sceglie Jev (nome strumento, quando sceglierla).
-const ACTIONS: [(&str, &str); 13] = [
+const ACTIONS: [(&str, &str); 14] = [
     ("open_app", "Aprire, avviare, lanciare, far partire o mettere su un'app o un programma."),
     ("close_app", "Chiudere, spegnere, togliere o levare di torno un'app o un programma nominandolo."),
     ("web_search", "Cercare qualcosa su Google o su internet."),
@@ -112,6 +115,7 @@ const ACTIONS: [(&str, &str); 13] = [
     ("show_desktop", "Mostrare il desktop o ridurre a icona tutte le finestre."),
     ("close_window", "Chiudere la finestra o l'app che si sta usando."),
     ("check_updates", "Controllare se c'è un aggiornamento di HeyJev."),
+    ("keyboard", "Scrivere o digitare un testo, premere o cliccare un tasto, un pulsante o una scorciatoia (invio, uguale, control S…), fare un conto su un'app."),
     ("create_document", "Scrivere o creare un documento, un testo, una relazione, un file di testo."),
     ("create_website", "Creare un sito, una landing page, un MVP, un'app o un prototipo."),
     ("end_conversation", "Salutare, ringraziare, dire basta o chiudere la conversazione."),
@@ -131,34 +135,53 @@ const HEDGE: Duration = Duration::from_millis(1200);
 async fn race(key: &str, text: &str) -> Result<Vec<(String, Value)>, String> {
     let jev = jev_choose(key, text);
     tokio::pin!(jev);
-    match tokio::time::timeout(HEDGE, &mut jev).await {
-        Ok(Ok(calls)) => return Ok(calls),
-        Ok(Err(_)) => return gemini_choose(text).await, // Jev ha risposto con un errore
-        Err(_) => {}                                     // Jev in ritardo: si corre in due
+    if let Ok(jev) = tokio::time::timeout(HEDGE, &mut jev).await {
+        return match jev {
+            Ok(calls) if !passes(&calls) => Ok(calls),
+            jev => second_opinion(gemini_choose(text).await, jev),
+        };
     }
+    // Jev in ritardo: si corre in due.
     let gemini = gemini_choose(text);
     tokio::pin!(gemini);
     tokio::select! {
-        calls = &mut jev => match calls { Ok(calls) => Ok(calls), Err(_) => gemini.await },
+        jev = &mut jev => match jev {
+            Ok(calls) if !passes(&calls) => Ok(calls),
+            jev => second_opinion(gemini.await, jev),
+        },
         calls = &mut gemini => match calls { Ok(calls) => Ok(calls), Err(_) => jev.await },
     }
 }
 
-/// Jev sceglie l'azione e, per "apri …", l'app: due domande nella stessa richiesta.
+/// Jev passa la mano: "non è un comando", oppure più azioni, testo o tasti che non sa fare.
+fn passes(calls: &[(String, Value)]) -> bool {
+    calls.iter().all(|(name, _)| name == "not_a_command")
+}
+
+/// Decide Gemini; se non risponde vale Jev ("non è un comando") o, se era un errore, Gemini.
+fn second_opinion(
+    gemini: Result<Vec<(String, Value)>, String>,
+    jev: Result<Vec<(String, Value)>, String>,
+) -> Result<Vec<(String, Value)>, String> {
+    gemini.or_else(|error| jev.map_err(|_| error))
+}
+
+/// Jev sceglie l'azione, l'app per "apri …" e se basta un'azione sola: tre domande nella
+/// stessa richiesta.
 async fn jev_choose(key: &str, text: &str) -> Result<Vec<(String, Value)>, String> {
+    let answers = crate::jev_ask(key, text, questions(crate::apps::cached())).await?;
+    Ok(vec![pick(&answers, text)])
+}
+
+fn questions(installed: Vec<String>) -> Value {
     let actions: serde_json::Map<String, Value> = ACTIONS
         .iter()
         .map(|(name, about)| (name.to_string(), json!(about)))
         .collect();
-    let mut apps = serde_json::Map::new();
-    for name in crate::apps::cached() {
-        if apps.len() == MAX_APPS {
-            break;
-        }
-        apps.insert(name, Value::Null);
-    }
+    let mut apps: serde_json::Map<String, Value> =
+        installed.into_iter().take(MAX_APPS).map(|name| (name, Value::Null)).collect();
     apps.insert("none".into(), json!("Nessuna app della lista."));
-    let questions = json!({
+    json!({
         "action": {
             "type": "choice",
             "instructions": "Frase detta a voce all'assistente di un PC Windows: che azione chiede?",
@@ -168,10 +191,16 @@ async fn jev_choose(key: &str, text: &str) -> Result<Vec<(String, Value)>, Strin
             "type": "choice",
             "instructions": "Se la frase chiede di aprire o chiudere un'app, quale di queste? Altrimenti none.",
             "criteria": apps
+        },
+        "steps": {
+            "type": "choice",
+            "instructions": "Frase detta a voce all'assistente di un PC Windows: chiede una sola azione o più cose?",
+            "criteria": {
+                "one": "Una sola azione (aprire o chiudere un'app, cercare, mostrare il desktop, creare un documento o un sito, salutare) o nessuna azione.",
+                "many": "Più azioni una dopo l'altra, oppure scrivere o digitare un testo, fare un conto su un'app, premere o cliccare un tasto o un pulsante."
+            }
         }
-    });
-    let answers = crate::jev_ask(key, text, questions).await?;
-    Ok(vec![pick(&answers, text)])
+    })
 }
 
 /// Dalla risposta di Jev allo strumento da eseguire.
@@ -180,7 +209,12 @@ fn pick(answers: &Value, text: &str) -> (String, Value) {
     let sure = answers["action"]["confidence"].as_f64().unwrap_or(0.0) >= MIN_CONFIDENCE;
     let app = answers["app"]["choice"].as_str().unwrap_or("none");
     let app_sure = app != "none" && answers["app"]["confidence"].as_f64().unwrap_or(0.0) >= APP_CONFIDENCE;
+    let many = answers["steps"]["choice"] == "many"
+        && answers["steps"]["confidence"].as_f64().unwrap_or(0.0) >= MIN_CONFIDENCE;
     let (name, args) = match action {
+        // Più azioni, testo o tasti: Jev non li sa fare, passa a Gemini (vedi `passes`).
+        _ if many => ("not_a_command", json!({})),
+        "keyboard" => ("not_a_command", json!({})),
         _ if !sure && app_sure => ("open_app", json!({ "name": app })),
         _ if !sure => ("not_a_command", json!({})),
         "open_app" | "close_app" if app == "none" => ("not_a_command", json!({})),
@@ -280,20 +314,15 @@ mod jev_eval {
             ("Chiudi Chrome", "close_app", "Google Chrome"),
             ("Levami di torno la calcolatrice", "close_app", "Calcolatrice"),
             ("Cercami su internet come si fa la carbonara", "web_search", ""),
+            // Più azioni, testo o tasti: Jev passa la mano a Gemini (not_a_command).
+            ("Apri la calcolatrice e fai duemilacinquecento più tremila ottocentocinquanta", "not_a_command", ""),
+            ("Clicca su uguale", "not_a_command", ""),
+            ("Salva il file con control esse", "not_a_command", ""),
+            ("Premi invio", "not_a_command", ""),
         ];
         let key = crate::jev_key().expect("chiave Jev nel Credential Manager");
         let apps = ["Spotify", "Calcolatrice", "Esplora file", "SmileSync", "PitStop Workshop Manager", "Google Chrome"];
-        let mut criteria = serde_json::Map::new();
-        for app in apps {
-            criteria.insert(app.into(), serde_json::Value::Null);
-        }
-        criteria.insert("none".into(), serde_json::json!("Nessuna app della lista."));
-        let actions: serde_json::Map<String, serde_json::Value> =
-            super::ACTIONS.iter().map(|(n, a)| (n.to_string(), serde_json::json!(a))).collect();
-        let questions = serde_json::json!({
-            "action": { "type": "choice", "instructions": "Frase detta a voce all'assistente di un PC Windows: che azione chiede?", "criteria": actions },
-            "app": { "type": "choice", "instructions": "Se la frase chiede di aprire o chiudere un'app, quale di queste? Altrimenti none.", "criteria": criteria }
-        });
+        let questions = super::questions(apps.map(String::from).to_vec());
         let (mut ok, mut times) = (0, Vec::new());
         for (text, action, app) in cases {
             let start = Instant::now();
@@ -305,10 +334,11 @@ mod jev_eval {
             let good = name == action && (app.is_empty() || args["name"] == app);
             ok += usize::from(good);
             println!(
-                "JEV {} {text} -> {name} {args} (azione {} {:.2}, app {} {:.2})",
+                "JEV {} {text} -> {name} {args} (azione {} {:.2}, app {} {:.2}, passi {} {:.2})",
                 if good { "ok" } else { "NO" },
                 answers["action"]["choice"], answers["action"]["confidence"].as_f64().unwrap_or(0.0),
-                answers["app"]["choice"], answers["app"]["confidence"].as_f64().unwrap_or(0.0)
+                answers["app"]["choice"], answers["app"]["confidence"].as_f64().unwrap_or(0.0),
+                answers["steps"]["choice"], answers["steps"]["confidence"].as_f64().unwrap_or(0.0)
             );
         }
         times.sort();
@@ -389,6 +419,11 @@ mod race_eval {
             "Che circonferenza ha la Terra?",
             "Puoi farmi vedere il desktop?",
             "Ok basta così, grazie",
+            "Apri la calcolatrice e fai duemilacinquecento più tremila ottocentocinquanta",
+            "Metti su la calcolatrice, digita 12 per 7 e poi premi uguale",
+            "Clicca su uguale",
+            "Salva il file con control esse",
+            "Quanto fa diciassette per ventitré?",
         ] {
             let start = Instant::now();
             let calls = tauri::async_runtime::block_on(super::race(&key, text));

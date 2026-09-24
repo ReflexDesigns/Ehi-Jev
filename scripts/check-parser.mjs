@@ -1,6 +1,6 @@
 // Controllo del parser offline sulle trascrizioni reali di Whisper tiny. Uso: npm test
 import assert from 'node:assert/strict';
-import { parseCommands } from '../src/lib/commandParser.ts';
+import { arithmetic, parseCommands } from '../src/lib/commandParser.ts';
 import { applyCorrections, buildProfile, learn } from '../src/lib/voiceProfile.ts';
 
 const cases = {
@@ -64,6 +64,18 @@ const cases = {
   ],
   "Scrivi ls e premi invio, poi apri l'app Spotify, grazie.": ['type_text:ls e premi invio', 'open_app:spotify', 'cancel'],
   'Scrivi pane e latte.': ['type_text:pane e latte.'],
+  'Apri la calcolatrice e digita duemilacinquecento più tremila ottocentocinquanta e clicca su uguale.': [
+    'open_app:calcolatrice',
+    'type_text:2500+3850',
+    'press_keys:=',
+  ],
+  'Digita 2.500 più 3.850 e premi uguale.': ['type_text:2500+3850', 'press_keys:='],
+  'Premi invio.': ['press_keys:enter'],
+  'Clicca sul pulsante uguale.': ['press_keys:='],
+  'Scrivi grazie per tutto.': ['type_text:grazie per tutto.'],
+  // Avanza un pezzo che nessuna regola capisce: decide l'AI (i comandi trovati sono la riserva).
+  'Apri la calcolatrice e fai duemilacinquecento più tremila ottocentocinquanta.': ['interpret', 'open_app:calcolatrice'],
+  'Apri il terminale, per favore.': ['open_terminal'],
   // Parole storpiate da Whisper tiny (reali e dal confronto modelli).
   'Amnula.': ['cancel'],
   'Anula.': ['cancel'],
@@ -80,6 +92,15 @@ for (const [text, actions] of Object.entries(cases)) {
   assert.deepEqual(parseCommands(text), actions, text);
 }
 console.log(`parser ok (${Object.keys(cases).length} casi)`);
+
+// Conti detti a voce, come si digitano nella calcolatrice.
+assert.equal(arithmetic('duemilacinquecento più tremila ottocentocinquanta'), '2500+3850');
+assert.equal(arithmetic('centottanta diviso per tre.'), '180/3');
+assert.equal(arithmetic('ventuno per 1,5'), '21*1,5');
+assert.equal(arithmetic('milleduecento meno trentatré'), '1200-33');
+assert.equal(arithmetic('ciao Marco'), null);
+assert.equal(arithmetic('grazie per tutto'), null);
+assert.equal(arithmetic('2500'), null); // un numero da solo si scrive com'è
 
 // Imprinting: correzioni imparate dal tutorial.
 assert.deepEqual(learn('Apri il terminale', 'Apri il terminale.'), []);

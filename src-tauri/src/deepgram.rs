@@ -169,8 +169,9 @@ async fn listen(
         ("sample_rate", STT_RATE.to_string()),
         ("channels", "1".into()),
         ("interim_results", "true".into()),
-        // Solo punteggiatura: smart_format scriveva "seconda riga" come "2º riga" (misurato),
-        // male per «Scrivi …». I numeri restano come si dicono.
+        // Solo punteggiatura: smart_format (e anche numerals) scrivevano "seconda riga" come
+        // "2º riga" (misurato), male per «Scrivi …». I numeri restano in lettere: i conti per
+        // la calcolatrice li converte il parser (`arithmetic` in commandParser.ts).
         ("punctuate", "true".into()),
         // Fine frase dopo 300 ms di silenzio; UtteranceEnd come rete di sicurezza.
         ("endpointing", "300".into()),

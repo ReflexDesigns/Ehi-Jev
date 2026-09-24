@@ -52,13 +52,14 @@ Dopo «Hey Jev» HeyJev resta in ascolto ed esegue ogni frase appena fai una pau
 | «Chiudi questo» | «Chiudi la finestra», «Close this» | Chiude la finestra che era attiva quando hai chiamato HeyJev, o l’app appena aperta (mai HeyJev né il desktop) |
 | «Chiudi Chrome» | «Chiudi Word», «Chiudi il blocco note» | Chiude le finestre aperte di quell’app, come Alt+F4 (i documenti non salvati te li chiede l’app) |
 | «Cerca … su Google» | «Cerca il meteo di domani», «Cercami su internet…» | Apre la ricerca Google nel browser |
-| «Scrivi …» | «Scrivi Ciao Marco, a domani e premi invio», «… e invio» | Digita il testo nella finestra che avevi davanti, o nell’app appena aperta; Invio solo se lo chiedi. Il testo finisce a «poi apri/scrivi/cerca…» |
+| «Scrivi …» | «Scrivi Ciao Marco, a domani e premi invio», «Digita 2500 più 3850» | Digita il testo nella finestra che avevi davanti, o nell’app appena aperta; Invio solo se lo chiedi. Un conto detto a voce si digita in cifre (`2500+3850`). Il testo finisce a «poi apri/scrivi/premi…» |
+| «Premi invio» / «Clicca su uguale» | «Premi il tasto tab», «Salva con control S» | Preme il tasto (o la scorciatoia) nella stessa finestra di «Scrivi» |
 | «Crea un documento su …» | «Scrivimi un file / una relazione / un articolo…» | Documento `.md` (o `.txt`) in **Download** |
 | «Crea un sito / un MVP / un’app …» | «Preparami una landing / un prototipo…» | Progetto in `C:\Users\<tu>\<nome-progetto>` |
 | «Controlla aggiornamenti» | «Check for updates» | Cerca una nuova versione; si installa solo dopo il tuo clic |
 | «Spegni il PC» / «Riavvia il PC» | «Spegni il computer», «Restart the computer» | Te lo dice e aspetta 15 secondi: «annulla» (o «no», «ferma», «stop») lo ferma. Un’app con lavoro non salvato blocca lo spegnimento |
 | «Grazie» / «Silenzio» | «Ok», «Basta», «Stop», «Thank you» | Chiude l’ascolto |
-| Qualsiasi altra frase | «Fammi vedere il desktop», «Metti su SmileSync» | Jev sceglie il comando giusto; se non è un comando (es. «che circonferenza ha la Terra?») non fa niente |
+| Qualsiasi altra frase | «Fammi vedere il desktop», «Metti su SmileSync», «Apri la calcolatrice e fai 2500 più 3850» | Jev sceglie il comando giusto; se servono più azioni in fila, testo o tasti decide Gemini. Se non è un comando (es. «che circonferenza ha la Terra?») non fa niente |
 
 **Richieste all’AI**: dopo «crea un documento/sito…» tutto quello che dici fino a «grazie» (o al silenzio) diventa la richiesta; «annulla» la butta. Il lavoro va avanti in background: l’isola e la notifica ti dicono quando è pronto.
 
@@ -84,7 +85,7 @@ Clic sull’icona nella system tray (o tasto destro → **Impostazioni…**):
 - notifica di Windows quando un documento richiesto è pronto;
 - **Chiave Deepgram** ([console.deepgram.com](https://console.deepgram.com)): ascolto in streaming (nova-3, italiano) e voce Aura 2 Maia;
 - **Chiave Jev** ([typesafe.ai](https://docs.typesafe.ai/api)): Jev, il modello System One di TypeSafe, sceglie in circa 0,4 s il comando e l’app per le frasi dette a modo tuo;
-- **Chiave OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/keys)): documenti (Gemini Flash) e siti (DeepSeek Flash); Gemini 3.5 Flash-Lite fa anche da riserva se Jev non risponde. Si paga a consumo su OpenRouter;
+- **Chiave OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/keys)): documenti (Gemini Flash) e siti (DeepSeek Flash); Gemini 3.5 Flash-Lite decide le frasi con più azioni e fa da riserva se Jev non risponde. Si paga a consumo su OpenRouter;
 - **Chiavi** (procedura guidata), **Registra voce**, **Parole imparate** e controllo aggiornamenti.
 
 Le chiavi vengono verificate prima del salvataggio. Un clic fuori dall’isola chiude le Impostazioni (salvando, se hai cambiato qualcosa); l’isola prende solo i clic sopra di sé, il resto passa alle finestre sotto.
