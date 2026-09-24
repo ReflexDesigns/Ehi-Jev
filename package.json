@@ -1,7 +1,7 @@
 {
   "name": "heyjev",
   "private": true,
-  "version": "0.2.15",
+  "version": "0.2.16",
   "type": "module",
   "description": "HeyJev - Direttore Operativo Vocale del PC (The Notch)",
   "scripts": {
