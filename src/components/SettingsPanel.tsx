@@ -1,9 +1,10 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   aiKeyConfigured,
   deepgramKeyConfigured,
   getSettings,
   jevKeyConfigured,
+  onOutsideClick,
   saveAiKey,
   saveDeepgramKey,
   saveJevKey,
@@ -42,10 +43,22 @@ export default function SettingsPanel({
   const [jevReady, setJevReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const form = useRef<HTMLFormElement>(null);
+  const opened = useRef(''); // impostazioni com'erano all'apertura
+  const changed = useRef(false);
+  changed.current =
+    Boolean(aiKey.trim() || jevKey.trim() || deepgramKey.trim()) ||
+    (settings !== null && JSON.stringify(settings) !== opened.current);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  // Clic altrove: come «Salva» se hai cambiato qualcosa, altrimenti come «Chiudi».
+  useEffect(() => onOutsideClick(() => (changed.current ? form.current?.requestSubmit() : closeRef.current())), []);
 
   useEffect(() => {
     getSettings().then(
       (loaded) => {
+        opened.current = JSON.stringify(loaded);
         setSettings(loaded);
         setInitialRecognition(loaded.recognition);
       },
@@ -58,7 +71,7 @@ export default function SettingsPanel({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!settings) return;
+    if (!settings || saving) return;
     setSaving(true);
     try {
       if (aiKey.trim()) await saveAiKey(aiKey);
@@ -77,7 +90,7 @@ export default function SettingsPanel({
   const update = (patch: Partial<Settings>) => setSettings((current) => (current ? { ...current, ...patch } : current));
 
   return (
-    <form className="notch-panel" onSubmit={(event) => void submit(event)}>
+    <form ref={form} className="notch-panel" onSubmit={(event) => void submit(event)}>
       {settings ? (
         <>
           <label className="settings-row">
@@ -125,7 +138,7 @@ export default function SettingsPanel({
             />
           </label>
           <label className="settings-row">
-            <span>Notifica quando un documento o sito è pronto</span>
+            <span>Notifica quando un documento richiesto è pronto</span>
             <input
               type="checkbox"
               checked={settings.notifications}

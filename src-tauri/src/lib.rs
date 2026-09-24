@@ -23,18 +23,18 @@ use tauri::{
 };
 use tauri_plugin_updater::{Update, UpdaterExt};
 use windows_sys::Win32::{
-    Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HWND},
+    Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HWND, POINT, RECT},
     System::Threading::CreateMutexW,
     UI::{
         Input::KeyboardAndMouse::{
-            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-            KEYEVENTF_UNICODE, VK_D, VK_LWIN, VK_RETURN,
+            GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+            KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_D, VK_LBUTTON, VK_LWIN, VK_RETURN,
         },
         Shell::ShellExecuteW,
         WindowsAndMessaging::{
-            GetClassNameW, GetForegroundWindow, PostMessageW, SetForegroundWindow, SC_CLOSE,
-            SW_SHOWNORMAL,
-            WM_SYSCOMMAND,
+            GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowRect,
+            PostMessageW, SetForegroundWindow, WindowFromPoint, GA_ROOTOWNER, SC_CLOSE,
+            SW_SHOWNORMAL, WM_SYSCOMMAND,
         },
     },
 };
@@ -181,11 +181,46 @@ fn save_settings(
     Ok(())
 }
 
-/// Finestra in primo piano al momento della wake word: bersaglio di `close_current`.
+/// Finestra in primo piano al momento della wake word: bersaglio di «scrivi» e `close_current`.
 static TARGET_WINDOW: AtomicIsize = AtomicIsize::new(0);
+/// App aperta a voce in questa sessione: quando, e la finestra in primo piano prima.
+static OPENED: Mutex<Option<(Instant, isize)>> = Mutex::new(None);
+/// Quanto si aspetta che l'app aperta venga in primo piano.
+const OPEN_WAIT: Duration = Duration::from_secs(8);
 
 pub(crate) fn remember_foreground_window() {
     TARGET_WINDOW.store(unsafe { GetForegroundWindow() } as isize, Ordering::Release);
+    if let Ok(mut opened) = OPENED.lock() {
+        *opened = None;
+    }
+}
+
+/// «Apri X»: da qui «scrivi» e «chiudi questo» vanno nella finestra di X.
+pub(crate) fn opening() {
+    if let Ok(mut opened) = OPENED.lock() {
+        *opened = Some((Instant::now(), unsafe { GetForegroundWindow() } as isize));
+    }
+}
+
+/// Bersaglio di «scrivi» e «chiudi questo»: la finestra del «Hey Jev», o quella dell'app
+/// aperta nel frattempo appena arriva in primo piano. Se non arriva (una scheda nel browser
+/// già davanti) resta quella di prima.
+fn target_window(own: Option<isize>) -> HWND {
+    if let Some((since, before)) = OPENED.lock().ok().and_then(|mut opened| opened.take()) {
+        loop {
+            let now = unsafe { GetForegroundWindow() } as isize;
+            if now != 0 && now != before && Some(now) != own {
+                TARGET_WINDOW.store(now, Ordering::Release);
+                thread::sleep(Duration::from_millis(700)); // appena aperta: pronta per i tasti
+                break;
+            }
+            if since.elapsed() >= OPEN_WAIT {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+    TARGET_WINDOW.load(Ordering::Acquire) as HWND
 }
 
 /// Carica `%APPDATA%\com.heyjev.app\.env.local`; quello del repo solo in debug.
@@ -270,9 +305,7 @@ fn show_window(app: AppHandle) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or_else(|| "Finestra HeyJev non disponibile.".to_string())?;
     window.show().map_err(|error| error.to_string())?;
-    window
-        .set_ignore_cursor_events(false)
-        .map_err(|error| error.to_string())
+    set_clickthrough(&app, false)
 }
 
 // La finestra resta caricata: il listener nativo vive nel backend Rust.
@@ -286,11 +319,66 @@ fn set_listening(app: AppHandle, active: bool) -> Result<(), String> {
     set_clickthrough(&app, !active)
 }
 
+/// (la finestra accetta click: sessione o pannello aperti; click-through applicato ora).
+static CLICKS: Mutex<(bool, bool)> = Mutex::new((true, false));
+/// L'isola visibile in pixel della finestra (x, y, larghezza, altezza), dalla UI.
+static HIT_RECT: Mutex<(i32, i32, i32, i32)> = Mutex::new((0, 0, 0, 0));
+
 fn set_clickthrough(app: &AppHandle, ignore: bool) -> Result<(), String> {
-    app.get_webview_window("main")
-        .ok_or_else(|| "Finestra HeyJev non disponibile.".to_string())?
-        .set_ignore_cursor_events(ignore)
-        .map_err(|error| error.to_string())
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Finestra HeyJev non disponibile.".to_string())?;
+    let mut clicks = CLICKS.lock().map_err(|_| "Finestra HeyJev non disponibile.")?;
+    clicks.0 = !ignore;
+    // Aperta: dove prendere i click lo decide follow_cursor (solo sull'isola).
+    if ignore && !clicks.1 {
+        window.set_ignore_cursor_events(true).map_err(|error| error.to_string())?;
+        clicks.1 = true;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_hit_rect(x: i32, y: i32, width: i32, height: i32) {
+    if let Ok(mut rect) = HIT_RECT.lock() {
+        *rect = (x, y, width, height);
+    }
+}
+
+/// A finestra aperta, ogni 30 ms: i click fuori dall'isola passano alle finestre sotto (la
+/// finestra trasparente è più grande dell'isola) e un clic altrove chiude i pannelli
+/// (`app:outside-click`).
+fn follow_cursor(app: AppHandle, own: isize) {
+    thread::spawn(move || {
+        let mut was_down = false;
+        loop {
+            thread::sleep(Duration::from_millis(30));
+            let mut cursor = POINT { x: 0, y: 0 };
+            let mut frame = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            if unsafe { GetCursorPos(&mut cursor) == 0 || GetWindowRect(own as HWND, &mut frame) == 0 } {
+                continue;
+            }
+            let (x, y, width, height) = HIT_RECT.lock().map(|rect| *rect).unwrap_or_default();
+            let (left, top) = (cursor.x - frame.left, cursor.y - frame.top);
+            let inside = left >= x && left < x + width && top >= y && top < y + height;
+            let down = unsafe { GetAsyncKeyState(i32::from(VK_LBUTTON)) } < 0;
+            let Ok(mut clicks) = CLICKS.lock() else { continue };
+            if clicks.0 {
+                if clicks.1 == inside {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.set_ignore_cursor_events(!inside);
+                    }
+                    clicks.1 = !inside;
+                }
+                // Le tendine dei <select> sono finestre di HeyJev: non contano come "altrove".
+                let ours = unsafe { GetAncestor(WindowFromPoint(cursor), GA_ROOTOWNER) } as isize == own;
+                if down && !was_down && !inside && !ours {
+                    let _ = app.emit("app:outside-click", ());
+                }
+            }
+            was_down = down;
+        }
+    });
 }
 
 /// PCM float mono -> WAV 16 bit (Whisper ricampiona da solo a 16 kHz).
@@ -509,8 +597,12 @@ async fn install_pending_update(pending: State<'_, PendingUpdate>) -> Result<(),
         })
 }
 
-#[tauri::command]
+// Fuori dal thread principale: «chiudi questo» può aspettare l'app appena aperta.
+#[tauri::command(async)]
 fn execute_action(app: AppHandle, action: String) -> Result<String, String> {
+    if action.starts_with("open_") {
+        opening();
+    }
     match action.as_str() {
         "open_terminal" => Command::new("wt.exe")
             .spawn()
@@ -569,14 +661,15 @@ fn cancel_power() -> bool {
     POWER.swap(0, Ordering::AcqRel) != 0
 }
 
-/// Equivale ad Alt+F4 sulla finestra attiva al momento della wake word, mai su HeyJev
-/// né sul desktop/taskbar (lì Alt+F4 aprirebbe "Arresta Windows").
+/// Equivale ad Alt+F4 sulla finestra attiva al momento della wake word (o sull'app aperta
+/// dopo), mai su HeyJev né sul desktop/taskbar (lì Alt+F4 aprirebbe "Arresta Windows").
 fn close_target_window(app: &AppHandle) -> Result<(), String> {
-    let hwnd = TARGET_WINDOW.swap(0, Ordering::AcqRel) as HWND;
     let own = app
         .get_webview_window("main")
         .and_then(|window| window.hwnd().ok())
         .map(|own| own.0 as isize);
+    target_window(own);
+    let hwnd = TARGET_WINDOW.swap(0, Ordering::AcqRel) as HWND;
     let mut class = [0u16; 64];
     let length = unsafe { GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32) };
     let class = String::from_utf16_lossy(&class[..length.max(0) as usize]);
@@ -655,7 +748,15 @@ fn web_search(query: String) -> Result<String, String> {
 /// Il punto finale lo aggiunge la trascrizione: in un campo di ricerca non serve.
 fn split_enter(text: &str) -> (String, bool) {
     let trimmed = text.trim().trim_end_matches(['.', '!', ',', ';']).trim_end();
-    for suffix in [" e premi invio", " premi invio", " e invia", " e dai invio", " and press enter"] {
+    for suffix in [
+        " e premi invio",
+        " premi invio",
+        " e invia",
+        " e dai invio",
+        " e invio",
+        " e avvio",
+        " and press enter",
+    ] {
         let cut = trimmed.len().saturating_sub(suffix.len());
         if trimmed.len() > suffix.len()
             && trimmed.is_char_boundary(cut)
@@ -669,23 +770,28 @@ fn split_enter(text: &str) -> (String, bool) {
 }
 
 /// «Scrivi <testo>»: lo digita, come da tastiera, nella finestra che era in primo piano al
-/// «Hey Jev». Invio solo se richiesto a voce: in un terminale eseguirebbe un comando.
-#[tauri::command]
+/// «Hey Jev» o nell'app aperta a voce subito prima. Invio solo se richiesto a voce: in un
+/// terminale eseguirebbe un comando. Fuori dal thread principale: può aspettare l'app.
+#[tauri::command(async)]
 fn type_text(app: AppHandle, text: String) -> Result<String, String> {
     let (text, enter) = split_enter(&text);
     if text.is_empty() || text.chars().count() > 2_000 {
         return Err("Testo vuoto o troppo lungo.".into());
     }
-    let target = TARGET_WINDOW.load(Ordering::Acquire) as HWND;
     let own = app
         .get_webview_window("main")
         .and_then(|window| window.hwnd().ok())
         .map(|own| own.0 as isize);
+    let target = target_window(own);
     if target.is_null() || own == Some(target as isize) {
         return Err("Nessuna finestra in cui scrivere.".into());
     }
     unsafe { SetForegroundWindow(target) };
     thread::sleep(Duration::from_millis(120)); // la finestra riprende il focus prima dei tasti
+    // Windows può negare il primo piano: meglio non scrivere che scrivere altrove.
+    if unsafe { GetForegroundWindow() } != target {
+        return Err("Non riesco a portare davanti la finestra: non scrivo.".into());
+    }
     let mut inputs = Vec::new();
     for unit in text.encode_utf16() {
         if unit == u16::from(b'\n') {
@@ -795,6 +901,7 @@ pub fn run() {
                     window.set_position(PhysicalPosition::new(x, bounds.y))?;
                 }
                 window.set_ignore_cursor_events(false)?;
+                follow_cursor(app.handle().clone(), window.hwnd()?.0 as isize);
             }
             let settings = MenuItem::with_id(app, "settings", "Impostazioni…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
@@ -846,6 +953,7 @@ pub fn run() {
             show_window,
             hide_window,
             set_listening,
+            set_hit_rect,
             execute_action,
             cancel_power,
             jev_key_configured,
@@ -871,6 +979,7 @@ mod tests {
         assert_eq!(split_enter("Ciao a tutti."), ("Ciao a tutti".into(), false));
         assert_eq!(split_enter("ricette carbonara e premi invio."), ("ricette carbonara".into(), true));
         assert_eq!(split_enter("Ciao Marco, a domani, e invia!"), ("Ciao Marco, a domani".into(), true));
+        assert_eq!(split_enter("herdr e avvio."), ("herdr".into(), true));
         assert_eq!(split_enter("Città è già là"), ("Città è già là".into(), false));
         assert_eq!(split_enter("premi invio"), ("premi invio".into(), false)); // solo il suffisso: si scrive
     }

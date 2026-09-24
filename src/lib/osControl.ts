@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 /**
  * Wrapper delle commandi Rust esposte da src-tauri.
@@ -46,6 +47,17 @@ export function executeAction(action: string): Promise<string> {
 /** «Annulla»: ferma lo spegnimento/riavvio in attesa. true se ce n'era uno. */
 export function cancelPower(): Promise<boolean> {
   return invoke<boolean>('cancel_power');
+}
+
+/** L'isola visibile, in pixel fisici della finestra: solo lì la finestra prende i click. */
+export function setHitRect(x: number, y: number, width: number, height: number): Promise<void> {
+  return invoke('set_hit_rect', { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) });
+}
+
+/** Clic fuori dall'isola, su un'altra finestra (i pannelli si chiudono). */
+export function onOutsideClick(handler: () => void): () => void {
+  const unlisten = listen('app:outside-click', handler);
+  return () => void unlisten.then((stop) => stop());
 }
 
 /** Controlla l'ultima release pubblica firmata su GitHub. */

@@ -56,6 +56,14 @@ const cases = {
   'Scrivi apri il terminale.': ['type_text:apri il terminale.'],
   'Scrivi Città di Roma, grazie.': ['type_text:Città di Roma', 'cancel'],
   'Scrivi un documento sulla storia di Roma.': ['create_document'],
+  'Apri il terminale e scrivi questo, poi scrivi herdr e avvio, poi apri Codenotch.': [
+    'open_terminal',
+    'type_text:questo',
+    'type_text:herdr e avvio',
+    'open_app:codenotch',
+  ],
+  "Scrivi ls e premi invio, poi apri l'app Spotify, grazie.": ['type_text:ls e premi invio', 'open_app:spotify', 'cancel'],
+  'Scrivi pane e latte.': ['type_text:pane e latte.'],
   // Parole storpiate da Whisper tiny (reali e dal confronto modelli).
   'Amnula.': ['cancel'],
   'Anula.': ['cancel'],

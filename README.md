@@ -19,7 +19,7 @@ Dici «Hey Jev»: un’isola nera stile Dynamic Island cola giù dall’alto, ti
 | 🤐 **Laconico** | Esegue e basta: non fa conversazione e non risponde a domande di cultura. Parla (voce Aura 2 **Maia**) solo per errori e avvisi, e se parli sopra si zittisce. |
 | 🔁 **Conversazione continua** | Una sola «Hey Jev», poi quanti comandi vuoi, anche nella stessa frase («apri il terminale e mostra il desktop»). «Grazie» chiude. |
 | 🎓 **Impara la tua voce** | Al primo avvio un tutorial di un minuto: dici «Hey Jev» e leggi qualche frase. HeyJev impara come ti sente. |
-| 🔔 **Ti avvisa** | Quando un documento o un sito è pronto arriva una notifica di Windows (disattivabile). |
+| 🔔 **Ti avvisa** | Quando un documento richiesto è pronto arriva una notifica di Windows (disattivabile). |
 | 🔄 **Si aggiorna da solo** | Controlla le release firmate su GitHub e si installa con un clic. |
 
 ## Privacy
@@ -41,7 +41,7 @@ Requisiti: Windows 10/11 x64, microfono, WebView2 (già presente su Windows 11).
 
 ## Comandi vocali
 
-Dopo «Hey Jev» HeyJev resta in ascolto ed esegue ogni frase appena fai una pausa. Smette dopo qualche secondo di silenzio o quando dici **«grazie»**, **«ok»** o **«silenzio»**.
+Dopo «Hey Jev» HeyJev resta in ascolto ed esegue ogni frase appena fai una pausa, mentre tu continui a parlare. Puoi mettere più comandi in fila: «apri il terminale e scrivi ls, poi scrivi herdr e invio, poi apri Spotify». Smette dopo qualche secondo di silenzio o quando dici **«grazie»**, **«ok»** o **«silenzio»**.
 
 | Cosa dire | Varianti | Cosa succede |
 |---|---|---|
@@ -49,18 +49,18 @@ Dopo «Hey Jev» HeyJev resta in ascolto ed esegue ogni frase appena fai una pau
 | «Apri terminale» | «Open terminal» | Windows Terminal (o `cmd.exe`) |
 | «Apri Claude» / «Apri ChatGPT» | «Open Claude», «Apri GPT» | Il sito nel browser predefinito |
 | «Mostra desktop» | «Show desktop», «Mostra scrivania» | **Win + D** |
-| «Chiudi questo» | «Chiudi la finestra», «Close this» | Chiude la finestra che era attiva quando hai chiamato HeyJev (mai HeyJev né il desktop) |
+| «Chiudi questo» | «Chiudi la finestra», «Close this» | Chiude la finestra che era attiva quando hai chiamato HeyJev, o l’app appena aperta (mai HeyJev né il desktop) |
 | «Chiudi Chrome» | «Chiudi Word», «Chiudi il blocco note» | Chiude le finestre aperte di quell’app, come Alt+F4 (i documenti non salvati te li chiede l’app) |
 | «Cerca … su Google» | «Cerca il meteo di domani», «Cercami su internet…» | Apre la ricerca Google nel browser |
-| «Scrivi …» | «Scrivi Ciao Marco, a domani e premi invio» | Digita il testo nella finestra che avevi davanti; Invio solo se lo chiedi |
+| «Scrivi …» | «Scrivi Ciao Marco, a domani e premi invio», «… e invio» | Digita il testo nella finestra che avevi davanti, o nell’app appena aperta; Invio solo se lo chiedi. Il testo finisce a «poi apri/scrivi/cerca…» |
 | «Crea un documento su …» | «Scrivimi un file / una relazione / un articolo…» | Documento `.md` (o `.txt`) in **Download** |
 | «Crea un sito / un MVP / un’app …» | «Preparami una landing / un prototipo…» | Progetto in `C:\Users\<tu>\<nome-progetto>` |
 | «Controlla aggiornamenti» | «Check for updates» | Cerca una nuova versione; si installa solo dopo il tuo clic |
-| «Spegni il PC» / «Riavvia il PC» | «Spegni il computer», «Restart the computer» | Te lo dice e aspetta 15 secondi: «annulla» lo ferma. Un’app con lavoro non salvato blocca lo spegnimento |
+| «Spegni il PC» / «Riavvia il PC» | «Spegni il computer», «Restart the computer» | Te lo dice e aspetta 15 secondi: «annulla» (o «no», «ferma», «stop») lo ferma. Un’app con lavoro non salvato blocca lo spegnimento |
 | «Grazie» / «Silenzio» | «Ok», «Basta», «Stop», «Thank you» | Chiude l’ascolto |
 | Qualsiasi altra frase | «Fammi vedere il desktop», «Metti su SmileSync» | Jev sceglie il comando giusto; se non è un comando (es. «che circonferenza ha la Terra?») non fa niente |
 
-**Richieste all’AI**: dopo «crea un documento/sito…» tutto quello che dici fino a «grazie» (o al silenzio) diventa la richiesta. Il lavoro va avanti in background: l’isola e la notifica ti dicono quando è pronto.
+**Richieste all’AI**: dopo «crea un documento/sito…» tutto quello che dici fino a «grazie» (o al silenzio) diventa la richiesta; «annulla» la butta. Il lavoro va avanti in background: l’isola e la notifica ti dicono quando è pronto.
 
 ## Registra voce
 
@@ -81,13 +81,13 @@ Clic sull’icona nella system tray (o tasto destro → **Impostazioni…**):
 
 - lingua dei comandi (italiano, inglese, automatica) e **chi ascolta**: Deepgram (online, consigliato) o Whisper sul PC (offline);
 - sensibilità del microfono e secondi di silenzio prima di smettere di ascoltare;
-- notifica di Windows a lavoro AI finito;
+- notifica di Windows quando un documento richiesto è pronto;
 - **Chiave Deepgram** ([console.deepgram.com](https://console.deepgram.com)): ascolto in streaming (nova-3, italiano) e voce Aura 2 Maia;
 - **Chiave Jev** ([typesafe.ai](https://docs.typesafe.ai/api)): Jev, il modello System One di TypeSafe, sceglie in circa 0,4 s il comando e l’app per le frasi dette a modo tuo;
 - **Chiave OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/keys)): documenti (Gemini Flash) e siti (DeepSeek Flash); Gemini 3.5 Flash-Lite fa anche da riserva se Jev non risponde. Si paga a consumo su OpenRouter;
 - **Chiavi** (procedura guidata), **Registra voce**, **Parole imparate** e controllo aggiornamenti.
 
-Le chiavi vengono verificate prima del salvataggio.
+Le chiavi vengono verificate prima del salvataggio. Un clic fuori dall’isola chiude le Impostazioni (salvando, se hai cambiato qualcosa); l’isola prende solo i clic sopra di sé, il resto passa alle finestre sotto.
 
 ## Come funziona
 

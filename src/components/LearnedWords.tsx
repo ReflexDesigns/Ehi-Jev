@@ -1,5 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { getSettings, recordSample, saveSettings, type Settings } from '../lib/osControl';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { getSettings, onOutsideClick, recordSample, saveSettings, type Settings } from '../lib/osControl';
 import { learn, likeJev, words } from '../lib/voiceProfile';
 
 interface LearnedWordsProps {
@@ -22,10 +22,14 @@ export default function LearnedWords({ onClose }: LearnedWordsProps) {
   const [phrase, setPhrase] = useState('');
   const [recording, setRecording] = useState(false);
   const [message, setMessage] = useState('');
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   useEffect(() => {
     getSettings().then(setSettings, (e) => setMessage(String(e)));
   }, []);
+  // Ogni modifica è già salvata: un clic altrove chiude e basta.
+  useEffect(() => onOutsideClick(() => closeRef.current()), []);
 
   const store = async (next: Settings) => {
     await saveSettings(next);

@@ -88,7 +88,8 @@ const CREATE_KINDS: [string, RegExp][] = [
 function creation(text: string): { action: string; index: number } | null {
   const verb = CREATE.exec(text);
   if (!verb) return null;
-  const rest = text.slice(verb.index);
+  // Solo fino al comando dopo: «scrivi ls, poi apri l'app X» non chiede di creare un'app.
+  const rest = text.slice(verb.index).split(NEXT)[0];
   const kinds = CREATE_KINDS.map(([action, noun]) => ({ action, at: rest.search(noun) })).filter((k) => k.at >= 0);
   if (!kinds.length) return null;
   kinds.sort((a, b) => a.at - b.at);
@@ -112,6 +113,9 @@ const SEARCH =
 
 /** «Scrivi <testo>»: tutto quello che segue si digita (dalla frase originale: maiuscole e accenti). */
 const TYPE = /\b(?:scrivi|digita|type)\s+(.+)$/i;
+/** Fine del testo da scrivere: «scrivi X, poi apri Y» continua con altri comandi. */
+const NEXT =
+  /[\s,;.]+(?:e\s+)?(?:poi|dopo|quindi|e|and|then)\s+(?=(?:ap+ri|avvia|lancia|chiudi|scrivi|digita|cerca|mostra|spegni|riavvia|open|launch|close|type|search|show)\b)/i;
 /** Un «grazie» in fondo è per Jev, non da scrivere. */
 const THANKS = /[\s,.;]+(?:grazie(?:\s+mille)?|thank\s*you)[.!]?\s*$/i;
 
@@ -147,6 +151,11 @@ export function parseCommands(transcript: string): string[] {
     // Anche «scrivi apri il terminale» o «scrivi ciao Marco» si scrive e basta: niente
     // comandi né parole di chiusura dentro il testo; chiude solo un «grazie» in fondo.
     const before = found.filter((command) => command.index < typed.index).sort((a, b) => a.index - b.index);
+    const next = NEXT.exec(original[1]);
+    if (next) {
+      const rest = original[1].slice(next.index + next[0].length);
+      return [...before.map((command) => command.action), `type_text:${original[1].slice(0, next.index)}`, ...parseCommands(rest)];
+    }
     const actions = [...before.map((command) => command.action), `type_text:${original[1].replace(THANKS, '')}`];
     return THANKS.test(original[1]) ? [...actions, 'cancel'] : actions;
   }

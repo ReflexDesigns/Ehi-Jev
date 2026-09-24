@@ -155,6 +155,7 @@ pub fn open_app(name: String) -> Result<String, String> {
             found.ok_or_else(|| format!("Non trovo l'app «{}».", name.trim()))?
         }
     };
+    crate::opening();
     Command::new("explorer.exe")
         .arg(format!("shell:AppsFolder\\{id}"))
         .spawn()

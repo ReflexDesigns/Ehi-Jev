@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import SoundWave from './SoundWave';
-import type { UpdateSummary } from '../lib/osControl';
+import { setHitRect, type UpdateSummary } from '../lib/osControl';
 import type { AppState } from '../types';
 
 interface NotchProps {
@@ -34,9 +34,26 @@ export default function Notch({
   children,
 }: NotchProps) {
   const expanded = Boolean(children) || Boolean(updateAvailable);
+  const notch = useRef<HTMLDivElement>(null);
+
+  // La finestra trasparente è più grande dell'isola: i click vanno solo all'isola.
+  useEffect(() => {
+    const island = notch.current;
+    if (!island) return;
+    const observer = new ResizeObserver(() => {
+      const scale = window.devicePixelRatio;
+      const width = island.offsetWidth;
+      void setHitRect(((window.innerWidth - width) / 2) * scale, 0, width * scale, island.offsetHeight * scale);
+    });
+    observer.observe(island);
+    return () => observer.disconnect();
+  }, []);
 
   return (
-    <div className={`notch notch-${state}${expanded ? ' notch-expanded' : ''}${speaking ? ' notch-speaking' : ''}`}>
+    <div
+      ref={notch}
+      className={`notch notch-${state}${expanded ? ' notch-expanded' : ''}${speaking ? ' notch-speaking' : ''}`}
+    >
       <div className="notch-row">
         <div className="notch-status">{status}</div>
         {state === 'setup' && !expanded && onActivate ? (

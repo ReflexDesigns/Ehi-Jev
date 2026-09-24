@@ -55,9 +55,10 @@ const LAST_RESULT_MS = 700; // l'ultimo esito resta visibile prima di chiudere
 const NOTICE_MS = 4000; // avviso a fine lavoro AI
 
 /** «… e premi invio» (come split_enter in lib.rs). */
-const ENTER = /(?:premi invio|e invia|dai invio|press enter)[\s.!,;]*$/i;
-/** Parole di chiusura che fermano anche lo spegnimento del PC in attesa. */
-const ABORT = /\b(?:annulla|cancel|stop|basta)\b/i;
+const ENTER = /(?:premi invio|e invia|dai invio|e invio|e avvio|press enter)[\s.!,;]*$/i;
+/** Fermano lo spegnimento del PC in attesa, anche storpiate («a nulla», «nulla» tagliato
+ *  dopo la wake word): meglio un PC acceso per sbaglio che uno spento per sbaglio. */
+const ABORT = /\b(?:(?:a\s*)?n+ul+[aeio]\w*|cancel\w*|stop|basta|no|ferm[aio]\w*|aspetta)\b/i;
 
 type Panel = 'settings' | 'keys' | 'tutorial' | 'learned';
 const PANEL_TITLES: Record<Panel, string> = {
@@ -91,6 +92,7 @@ export default function App() {
   const holdRef = useRef(false); // pannello aperto: non chiudere da soli
   const draftRef = useRef<{ kind: string; text: string } | null>(null); // richiesta AI in dettatura
   const queueRef = useRef<Promise<void>>(Promise.resolve());
+  const toolsRef = useRef<Promise<void>>(Promise.resolve()); // strumenti scelti da Jev
   const correctionsRef = useRef<Correction[]>([]); // imparate nel tutorial voce
   const typedRef = useRef(false); // nella sessione si è già scritto (senza Invio): serve lo spazio
 
@@ -190,8 +192,20 @@ export default function App() {
   /** Esegue in ordine i comandi di una frase. */
   const runCommands = useCallback(async (heard: string) => {
     const transcript = applyCorrections(heard, correctionsRef.current);
+    // Prima di tutto, e senza chiudere: se Jev la prendesse per un saluto il PC si spegnerebbe.
+    if (ABORT.test(transcript) && (await cancelPower())) {
+      say('Annullato.');
+      return;
+    }
     const actions = parseCommands(transcript);
     const draft = draftRef.current;
+    if (draft && /^\W*annulla\b/i.test(transcript)) {
+      // «Annulla» durante una dettatura la butta, non la manda all'AI.
+      draftRef.current = null;
+      say('Annullato.');
+      await endSession();
+      return;
+    }
     if (draft) {
       // Dettatura per l'AI: ogni frase si aggiunge alla richiesta, «grazie» la invia.
       draft.text += ` ${transcript}`;
@@ -221,7 +235,7 @@ export default function App() {
         return;
       }
       if (action === 'cancel') {
-        // «Annulla»/«stop» fermano anche uno spegnimento in attesa; «grazie» no.
+        // «Spegni il PC, annulla» nella stessa frase; «spegni il PC, grazie» no.
         if (ABORT.test(transcript) && (await cancelPower())) say('Annullato.');
         else setStatus('Ciao! 👋');
         await endSession(); // Rust risponde con app:session-end
@@ -263,7 +277,7 @@ export default function App() {
     }
   }, [checkUpdates, report, say]);
 
-  /** Strumento scelto da Gemini: si esegue subito, fuori dalla coda. */
+  /** Strumento scelto da Jev: si esegue subito, fuori dalla coda delle frasi. */
   const runTool = useCallback(async ({ name, args }: ToolCall) => {
     try {
       if (name in TOOL_ACTIONS) report(await executeAction(TOOL_ACTIONS[name]));
@@ -452,7 +466,10 @@ export default function App() {
         const draft = draftRef.current;
         setStatus(draft ? `✍️ ${draft.text} ${event.payload}` : event.payload);
       }),
-      listen<ToolCall>('app:tool', (event) => void runTool(event.payload)),
+      // In ordine: «apri X e scrivi Y» scrive nella finestra di X.
+      listen<ToolCall>('app:tool', (event) => {
+        toolsRef.current = toolsRef.current.then(() => runTool(event.payload));
+      }),
       listen<boolean>('app:speaking', (event) => setSpeaking(event.payload)),
       listen('app:barge-in', () => {
         if (sessionRef.current) setStatus('Ti ascolto…');
