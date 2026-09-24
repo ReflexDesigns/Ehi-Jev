@@ -63,6 +63,7 @@ fn tools() -> Value {
         tool("open_chatgpt", "Apre ChatGPT nel browser.", None),
         tool("show_desktop", "Mostra il desktop.", None),
         tool("close_window", "Chiude la finestra in primo piano.", None),
+        tool("close_all", "Chiude tutte le app aperte (tranne HeyJev).", None),
         tool("check_updates", "Controlla se c'è una nuova versione di HeyJev.", None),
         tool("create_document", "Fa scrivere un documento (file Markdown in Download).", Some(("request", "La richiesta completa: argomento, contenuto, stile."))),
         tool("create_website", "Fa creare un sito, un MVP o un'app (cartella nel profilo utente).", Some(("request", "La richiesta completa: cosa deve fare e come deve essere."))),
@@ -105,7 +106,7 @@ async fn choose(app: &AppHandle, text: &str) -> Result<Vec<String>, String> {
 }
 
 /// Azioni tra cui sceglie Jev (nome strumento, quando sceglierla).
-const ACTIONS: [(&str, &str); 14] = [
+const ACTIONS: [(&str, &str); 15] = [
     ("open_app", "Aprire, avviare, lanciare, far partire o mettere su un'app o un programma."),
     ("close_app", "Chiudere, spegnere, togliere o levare di torno un'app o un programma nominandolo."),
     ("web_search", "Cercare qualcosa su Google o su internet."),
@@ -114,6 +115,7 @@ const ACTIONS: [(&str, &str); 14] = [
     ("open_chatgpt", "Aprire ChatGPT."),
     ("show_desktop", "Mostrare il desktop o ridurre a icona tutte le finestre."),
     ("close_window", "Chiudere la finestra o l'app che si sta usando."),
+    ("close_all", "Chiudere tutte le app, tutti i programmi o tutte le finestre aperte."),
     ("check_updates", "Controllare se c'è un aggiornamento di HeyJev."),
     ("keyboard", "Scrivere o digitare un testo, premere o cliccare un tasto, un pulsante o una scorciatoia (invio, uguale, control S…), fare un conto su un'app."),
     ("create_document", "Scrivere o creare un documento, un testo, una relazione, un file di testo."),
@@ -196,7 +198,7 @@ fn questions(installed: Vec<String>) -> Value {
             "type": "choice",
             "instructions": "Frase detta a voce all'assistente di un PC Windows: chiede una sola azione o più cose?",
             "criteria": {
-                "one": "Una sola azione (aprire o chiudere un'app, cercare, mostrare il desktop, creare un documento o un sito, salutare) o nessuna azione.",
+                "one": "Una sola azione (aprire o chiudere un'app, chiudere tutte le app insieme, cercare, mostrare il desktop, creare un documento o un sito, salutare) o nessuna azione.",
                 "many": "Più azioni una dopo l'altra, oppure scrivere o digitare un testo, fare un conto su un'app, premere o cliccare un tasto o un pulsante."
             }
         }
@@ -319,6 +321,8 @@ mod jev_eval {
             ("Clicca su uguale", "not_a_command", ""),
             ("Salva il file con control esse", "not_a_command", ""),
             ("Premi invio", "not_a_command", ""),
+            ("Chiudi tutte le applicazioni", "close_all", ""),
+            ("Levami di torno tutti i programmi aperti", "close_all", ""),
         ];
         let key = crate::jev_key().expect("chiave Jev nel Credential Manager");
         let apps = ["Spotify", "Calcolatrice", "Esplora file", "SmileSync", "PitStop Workshop Manager", "Google Chrome"];

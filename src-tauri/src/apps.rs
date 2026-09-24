@@ -1,5 +1,6 @@
 //! «Apri <app>»: cerca il nome detto tra le app del menu Start e la avvia.
 //! «Chiudi <app>»: chiude le finestre aperte di quell'app (come Alt+F4).
+//! «Chiudi tutte le app»: chiude tutte le app aperte, tranne HeyJev.
 
 use std::{os::windows::process::CommandExt, path::Path, process::Command, sync::Mutex, thread};
 
@@ -7,13 +8,15 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HWND, LPARAM},
+    Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED},
     System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
         PROCESS_QUERY_LIMITED_INFORMATION,
     },
     UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetWindow, GetWindowTextW, GetWindowThreadProcessId,
-        IsWindowVisible, PostMessageW, GW_OWNER, SC_CLOSE, WM_SYSCOMMAND,
+        EnumWindows, GetClassNameW, GetWindow, GetWindowLongW, GetWindowTextW,
+        GetWindowThreadProcessId, IsWindowVisible, PostMessageW, GWL_EXSTYLE, GW_OWNER, SC_CLOSE,
+        WM_SYSCOMMAND, WS_EX_TOOLWINDOW,
     },
 };
 
@@ -222,6 +225,38 @@ fn open_windows() -> Vec<Window> {
     windows
 }
 
+/// Finestra "visibile" ma nascosta da Windows: app dello Store sospese, altri desktop virtuali,
+/// servizi come "Microsoft Text Input Application".
+fn cloaked(hwnd: isize) -> bool {
+    let mut cloaked = 0u32;
+    let size = std::mem::size_of::<u32>() as u32;
+    unsafe { DwmGetWindowAttribute(hwnd as HWND, DWMWA_CLOAKED as u32, &mut cloaked as *mut u32 as *mut _, size) == 0 && cloaked != 0 }
+}
+
+/// Un'app aperta, come nella barra delle applicazioni: niente finestrelle strumento (overlay
+/// NVIDIA, servizi come AsHotplugCtrl) né finestre nascoste da Windows (misurato).
+fn is_app(hwnd: isize) -> bool {
+    let extended = unsafe { GetWindowLongW(hwnd as HWND, GWL_EXSTYLE) } as u32;
+    extended & WS_EX_TOOLWINDOW == 0 && !cloaked(hwnd)
+}
+
+/// «Chiudi tutte le app»: Alt+F4 su ogni app aperta tranne HeyJev (`own`); il lavoro non
+/// salvato lo chiede ogni app.
+pub(crate) fn close_all(own: Option<isize>) -> Result<String, String> {
+    let targets: Vec<isize> = open_windows()
+        .into_iter()
+        .map(|window| window.hwnd)
+        .filter(|&hwnd| Some(hwnd) != own && is_app(hwnd))
+        .collect();
+    if targets.is_empty() {
+        return Err("Nessuna app aperta.".into());
+    }
+    for &hwnd in &targets {
+        unsafe { PostMessageW(hwnd as HWND, WM_SYSCOMMAND, SC_CLOSE as usize, 0) };
+    }
+    Ok(format!("Chiudo {} app.", targets.len()))
+}
+
 /// Le finestre principali aperte adesso: quella che compare dopo «apri X» è di X.
 pub(crate) fn window_handles() -> Vec<isize> {
     open_windows().into_iter().map(|window| window.hwnd).collect()
@@ -290,8 +325,19 @@ pub fn list_apps() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{belongs, find, Window};
+    use super::{belongs, find, is_app, open_windows, Window};
     use crate::words;
+
+    /// Solo lettura: cosa chiuderebbe «chiudi tutte le app» (HeyJev a parte).
+    /// cargo test open_windows_now -- --ignored --nocapture
+    #[test]
+    #[ignore = "legge le finestre del desktop"]
+    fn open_windows_now() {
+        for window in open_windows() {
+            let verdict = if is_app(window.hwnd) { "chiude" } else { "resta" };
+            println!("{verdict:<6} {:<18} {}", window.exe, window.title);
+        }
+    }
 
     #[test]
     fn close_matches_the_app_not_a_tab_title() {

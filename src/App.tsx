@@ -79,6 +79,7 @@ const TOOL_ACTIONS: Record<string, string> = {
   open_chatgpt: 'open_gpt',
   show_desktop: 'show_desktop',
   close_window: 'close_current',
+  close_all: 'close_all',
 };
 
 export default function App() {

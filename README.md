@@ -51,6 +51,7 @@ Dopo «Hey Jev» HeyJev resta in ascolto ed esegue ogni frase appena fai una pau
 | «Mostra desktop» | «Show desktop», «Mostra scrivania» | **Win + D** |
 | «Chiudi questo» | «Chiudi la finestra», «Close this» | Chiude la finestra che era attiva quando hai chiamato HeyJev, o l’app appena aperta (mai HeyJev né il desktop) |
 | «Chiudi Chrome» | «Chiudi Word», «Chiudi il blocco note» | Chiude le finestre aperte di quell’app, come Alt+F4 (i documenti non salvati te li chiede l’app) |
+| «Chiudi tutte le app» | «Chiudi tutto», «Chiudi tutti i programmi» | Chiude tutte le app aperte tranne HeyJev, come Alt+F4 su ognuna |
 | «Cerca … su Google» | «Cerca il meteo di domani», «Cercami su internet…» | Apre la ricerca Google nel browser |
 | «Scrivi …» | «Scrivi Ciao Marco, a domani e premi invio», «Digita 2500 più 3850» | Digita il testo nella finestra che avevi davanti, o nell’app appena aperta; Invio solo se lo chiedi. Un conto detto a voce si digita in cifre (`2500+3850`). Il testo finisce a «poi apri/scrivi/premi…» |
 | «Premi invio» / «Clicca su uguale» | «Premi il tasto tab», «Salva con control S» | Preme il tasto (o la scorciatoia) nella stessa finestra di «Scrivi» |

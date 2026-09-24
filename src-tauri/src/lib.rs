@@ -638,6 +638,11 @@ fn execute_action(app: AppHandle, action: String) -> Result<String, String> {
         "open_gpt" => open_url("https://chatgpt.com").map(|_| "ChatGPT aperto.".to_string()),
         "show_desktop" => send_chord(VK_LWIN, VK_D).map(|_| "Desktop mostrato.".to_string()),
         "close_current" => close_target_window(&app).map(|_| "Finestra chiusa.".to_string()),
+        "close_all" => apps::close_all(
+            app.get_webview_window("main")
+                .and_then(|window| window.hwnd().ok())
+                .map(|own| own.0 as isize),
+        ),
         "shutdown" => {
             schedule_power("/s");
             Ok("Spengo il PC tra 15 secondi: di' «annulla» per fermarlo.".into())

@@ -46,6 +46,13 @@ const RULES: CommandRule[] = [
     action: 'show_desktop',
     patterns: [/\b(?:mostra|show)\s*(?:il\s*)?desktop\b/gi, /\bmostra\s*(?:la\s*)?scrivania\b/gi],
   },
+  // «Chiudi tutte le app / tutto»: prima di «chiudi <nome>», che cercherebbe l'app «tutte».
+  {
+    action: 'close_all',
+    patterns: [
+      /\b(?:chiudi|close)\s+(?:tutt[eoi](?:\s+quant[ie])?|all)(?:\s+(?:(?:le|i|gli|the)\s+)?(?:app(?:licazioni|s)?|programmi|finestre|programs|windows))?\b/gi,
+    ],
+  },
   {
     action: 'close_current',
     patterns: [/\b(?:chiudi|close)\s*(?:questo|questa|quest'ultimo|this|(?:la\s*)?finestra|the\s*window)\b/gi],

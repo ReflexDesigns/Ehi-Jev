@@ -76,6 +76,10 @@ const cases = {
   // Avanza un pezzo che nessuna regola capisce: decide l'AI (i comandi trovati sono la riserva).
   'Apri la calcolatrice e fai duemilacinquecento più tremila ottocentocinquanta.': ['interpret', 'open_app:calcolatrice'],
   'Apri il terminale, per favore.': ['open_terminal'],
+  'Chiudi tutte le applicazioni.': ['close_all'],
+  'Chiudi tutto, grazie.': ['close_all', 'cancel'],
+  'Chiudi tutti i programmi aperti.': ['close_all'],
+  'Close all apps': ['close_all'],
   // Parole storpiate da Whisper tiny (reali e dal confronto modelli).
   'Amnula.': ['cancel'],
   'Anula.': ['cancel'],
